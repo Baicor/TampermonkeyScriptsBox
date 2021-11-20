@@ -11,7 +11,7 @@
 // ==/UserScript==
 
 function initUserSelect(){
-    let allStyle = $("head>style")
+    let allStyle = document.querySelectorAll("head>style")
     for (var i=0; i < allStyle.length; i++) {
         let content = allStyle[i].textContent
         if (content.search('user-select') != -1){
