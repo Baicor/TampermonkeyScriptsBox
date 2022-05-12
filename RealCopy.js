@@ -38,6 +38,7 @@ function initUserSelect(){
         if (!clip){return;}
         let content = window.getSelection().toString();
         if (content){
+            content = content.replace(/ /g, ' ')
             clip.setData('text/plain', content)
             e.preventDefault()
             e.stopPropagation()
