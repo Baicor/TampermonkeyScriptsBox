@@ -13,7 +13,7 @@
 var hostMap = {
     'www.bilibili.com': '.class',
     'www.zhihu.com': 'div.Modal.Modal--default.signFlowModal > button',
-    'zhuanlan.zhihu.com':'.Button.Modal-closeButton.Button--plain',
+    'zhuanlan.zhihu.com':'div.Modal.Modal--default.signFlowModal > button',
     'blog.csdn.net': '.passport-login-box>span'
 }
 
