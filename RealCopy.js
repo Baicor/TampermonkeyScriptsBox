@@ -33,13 +33,13 @@ function initUserSelect(){
     }
     observer.observe(article, options);
 
-    document.addEventListener('copy', function(e){
-        let clip = e.clipboardData || window.clipboardData;
+    document.addEventListener('click', function(e){
+        let clip = window.clipboardData || navigator.clipboard;
         if (!clip){return;}
         let content = window.getSelection().toString();
         if (content){
             content = content.replace(/ /g, ' ')
-            clip.setData('text/plain', content)
+            clip.writeText(content)
             e.preventDefault()
             e.stopPropagation()
         }

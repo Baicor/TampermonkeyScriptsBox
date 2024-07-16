@@ -12,14 +12,22 @@
 
 
 function removeLoginButton(){
-    let el = document.getElementById('btn-no-login')
-    el.parentNode.remove()
+    let el = document.querySelector('#btn-no-login')
+    if (el != null && el != undefined){
+        el.remove()
+    }
+    el = document.querySelector(".passport-login-container")
+    if (el != null && el != undefined){
+        el.remove()
+    }
 }
 
 
 function showHide(){
-    let el = document.getElementById("article_content")
-    el.removeAttribute('style')
+    let el = document.querySelector("#article_content")
+    if (el != null && el != undefined){
+        el.removeAttribute('style')
+    }
 }
 
 function exector(){
