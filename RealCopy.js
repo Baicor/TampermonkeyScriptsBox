@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RealCopy
 // @namespace    http://tampermonkey.net/
-// @version      0.3
+// @version      0.4
 // @description  按住ctrl＋选中即可复制
 // @author       Galio
 // @include       *
@@ -11,6 +11,7 @@
 // ==/UserScript==
 
 var isCtrlDown = false
+var pressTime = null
 
 function initUserSelect(){
     let allStyle = document.querySelectorAll("head>style")
@@ -20,6 +21,10 @@ function initUserSelect(){
             allStyle[i].textContent = content.replace(/user-select: none/g, "user-select: text")
         }
     }
+}
+
+function canCopy(){
+    return !clip || !isCtrlDown || (!pressTime && typeof(pressTime) != "undefined" && pressTime != 0 && Date.now() - pressTime > 0)
 }
 
 (function() {
@@ -38,7 +43,9 @@ function initUserSelect(){
     document.addEventListener('click', function(e){
         try{
             let clip = window.clipboardData || navigator.clipboard;
-            if (!clip || !isCtrlDown){return;}
+            if !canCopy(){
+                return;
+            }
             let content = window.getSelection().toString();
             if (content){
                 content = content.replace(/ /g, ' ')
@@ -48,10 +55,12 @@ function initUserSelect(){
             }
         }finally {
             isCtrlDown = false
+            pressTime = null
         }
     }, true)
 
     document.addEventListener('keydown', function(e){
         isCtrlDown = e.ctrlKey
+        pressTime = Date.now()
     }, true)
 })();
