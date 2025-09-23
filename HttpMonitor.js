@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HTTP监控器
 // @namespace    http://tampermonkey.net/
-// @version      0.4
+// @version      0.5
 // @description  监控HTTP请求并弹窗警告
 // @author       Galio
 // @match        *://*/*
@@ -779,16 +779,20 @@ let CONFIG = {
     fetchMaxBytes: 131072
 };
 
+function __log(handler, ...data){
+    if (CONFIG.verbose) handler("[http-monitor]", ...data)
+}
+
 function log(...data) {
-    if (CONFIG.verbose) console.log("[http-monitor]", ...data);
+    __log(console.log, ...data)
 }
 
 function warn(...data) {
-    if (CONFIG.verbose) console.warn("[http-monitor]", ...data);
+    __log(console.warn, ...data)
 }
 
 function error(...data){
-    if (CONFIG.verbose) console.error("[http-monitor]", ...data);
+    __log(console.error, ...data)
 }
 
 // 从localStorage加载配置
@@ -868,6 +872,7 @@ function toAbsoluteUrl(input) {
     try {
         return new URL(input, location.href).href;
     } catch (e) {
+        error("url归一化错误", e)
         return input;
     }
 }
@@ -882,7 +887,11 @@ function revivePattern(patternLike) {
         if (lastSlash > 0) {
             const body = patternLike.slice(1, lastSlash);
             const flags = patternLike.slice(lastSlash + 1);
-            try { return new RegExp(body, flags); } catch { }
+            try {
+                return new RegExp(body, flags);
+            } catch(e) {
+                error("构造RegExp错误: " + patternLike, e);
+            }
         }
     }
     return patternLike;
@@ -895,7 +904,12 @@ function ensureUrlPatterns() {
         if (p instanceof RegExp) return p;
         const revived = revivePattern(p);
         if (revived instanceof RegExp) return revived;
-        try { return new RegExp(String(p)); } catch { return /.*/; }
+        try {
+            return new RegExp(String(p)); 
+        } catch(e) {
+            error("ensureUrlPatterns error, use default", e);
+            return /.*/;
+        }
     });
 }
 
@@ -984,11 +998,13 @@ function fallbackCopyTextToClipboard(text) {
                     if (shouldMonitor(abs)) {
                         log('[sendBeacon]', abs, data);
                     }
-                } catch { }
+                } catch(e) {
+                    error("record sendBeacon error", e)
+                }
                 return originalSendBeacon(url, data);
             };
         } catch(e) {
-            log('[sendBeacon error]' + e);
+            error('[sendBeacon error]' + e);
         }
     }
 
@@ -1027,15 +1043,20 @@ function fallbackCopyTextToClipboard(text) {
             try {
                 if (absoluteUrl) {
                     const u = new URL(absoluteUrl);
-                    const parts = u.pathname.split('/').filter(Boolean);
-                    interfaceName = (parts[parts.length - 1] || u.hostname || 'request').slice(-128);
-                    interfaceName = decodeURIComponent(interfaceName).replace(/[^a-zA-Z0-9._-]+/g, '_');
-                    if (!interfaceName) interfaceName = 'request';
                     urlProt = (u.protocol || '').replace(/:$/, '');
                     urlHost = u.host || '';
                     urlPath = u.pathname || '';
+                    const parts = urlPath.split('/').filter(Boolean);
+                    let sliceStartIndxe = 0;
+                    if (urlPath.startsWith("/")) sliceStartIndxe = 1;
+                    interfaceName = (urlPath.slice(sliceStartIndxe) || u.hostname || 'request').slice(-128);
+                    interfaceName = decodeURIComponent(interfaceName).replace(/[^a-zA-Z0-9._-]+/g, '_');
+                    if (!interfaceName) interfaceName = 'request';
+                    
                 }
-            } catch { }
+            } catch(e) {
+                error("alert and parser url error", e)
+            }
 
             // 准备复制内容与显示内容（请求信息过长时仅显示部分，但复制完整）
             const errorContent = message ? `${message}` : '';
@@ -1217,7 +1238,7 @@ function fallbackCopyTextToClipboard(text) {
                         const blob = new Blob([JSON.stringify(har, null, 2)], { type: 'application/json;charset=utf-8' });
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
-                        a.href = url; a.download = `${interfaceName || 'request'}-${ts}.har`;
+                        a.href = url; a.download = `${interfaceName || 'request'}_${ts}.har`;
                         document.body.appendChild(a); a.click(); a.remove();
                         URL.revokeObjectURL(url);
                     } catch (err) {
@@ -1236,7 +1257,7 @@ function fallbackCopyTextToClipboard(text) {
             const finishOnce = () => {
                 if (finished) return;
                 finished = true;
-                try { if (mo) { try { mo.disconnect(); } catch { } mo = null; } } catch { }
+                try { if (mo) { try { mo.disconnect(); } catch (e){error("MutationObserver disconnect error", e)} mo = null; } } catch { }
                 try { alertContainer.remove(); } finally { done(); }
             };
             let timer = setTimeout(finishOnce, AUTO_REMOVE_DELAY);
@@ -1259,7 +1280,7 @@ function fallbackCopyTextToClipboard(text) {
             mo = new MutationObserver((mutations) => {
                 if (!document.body.contains(alertContainer)) {
                     if (timer) { clearTimeout(timer); timer = null; }
-                    try { if (mo) mo.disconnect(); } catch { }
+                    try { if (mo) mo.disconnect(); } catch(e) {error("MutationObserver disconnect error", e)}
                     finishOnce();
                 }
             });
@@ -1291,13 +1312,13 @@ function fallbackCopyTextToClipboard(text) {
                 rawBody: body,
                 size: body.length
             };
-        } catch (error) {
+        } catch (e) {
             return {
                 contentType: response.headers.get('content-type') || 'unknown',
                 parsedBody: null,
                 rawBody: body,
                 size: body.length,
-                error: error.message
+                error: e.message
             };
         }
     }
@@ -1513,7 +1534,7 @@ function fallbackCopyTextToClipboard(text) {
                 <label style="display:block;margin-bottom:6px;"><input type="checkbox" class="plugin-enabled" ${meta.enabled !== false ? 'checked' : ''}> 启用</label>
                 <div class="plugin-code-wrapper">
                     <pre class="plugin-code-overlay"></pre>
-                    <textarea class="http-monitor-config-textarea plugin-code" placeholder="// 仅填写主体，无需 function/return\n//warnings是数组，用来存放告警文本\n// 可用: httpStatus, durationMs, sizeBytes, body, rawBody, contentType\nif (httpStatus >= 500) {\n  warnings.push('服务异常');\n}">${(CONFIG.pluginsSource && CONFIG.pluginsSource[index]) || ''}</textarea>
+                    <textarea class="http-monitor-config-textarea plugin-code" placeholder="// 仅填写主体，无需 function/return\n// warnings是数组，用来存放告警文本\n// 可用: httpStatus, durationMs, sizeBytes, body, rawBody, contentType\nif (httpStatus >= 500) {\n  warnings.push('服务异常');\n}">${(CONFIG.pluginsSource && CONFIG.pluginsSource[index]) || ''}</textarea>
                 </div>
                 <div class="plugin-toolbar">
                     <button class="remove-plugin-btn">删除</button>
@@ -1612,7 +1633,7 @@ function fallbackCopyTextToClipboard(text) {
                         w.postMessage({ id: reqId, sources: reuseSources.map(r => r.src), context });
                     });
                     let out = null; let timed = false;
-                    const timer = setTimeout(() => { try { w.terminate(); } catch { } out = { ok: false, error: 'timeout' }; timed = true; pluginWorker = null; }, timeoutMs);
+                    const timer = setTimeout(() => { try { w.terminate(); } catch(e) {error("worker中断错误", e)} out = { ok: false, error: 'timeout' }; timed = true; pluginWorker = null; }, timeoutMs);
                     out = await p;
                     clearTimeout(timer);
                     if (out && out.ok && Array.isArray(out.warnings)) {
@@ -1638,8 +1659,8 @@ function fallbackCopyTextToClipboard(text) {
                         worker.addEventListener('message', onMsg);
                         worker.postMessage({ id: execId, src: item.src, ctx: context });
                     });
-                    let res = null; let timed2 = false; const tmr = setTimeout(() => { try { worker.terminate(); } catch { } try { URL.revokeObjectURL(blobUrl); } catch { } res = { ok: false, error: 'timeout' }; timed2 = true; }, timeoutMs);
-                    res = await pr; clearTimeout(tmr); try { worker.terminate(); } catch { } try { URL.revokeObjectURL(blobUrl); } catch { }
+                    let res = null; let timed2 = false; const tmr = setTimeout(() => { try { worker.terminate(); } catch(e) {error("worker中断错误", e)} try { URL.revokeObjectURL(blobUrl); } catch(e) {error("revokeObjectURL error in worker", e)} res = { ok: false, error: 'timeout' }; timed2 = true; }, timeoutMs);
+                    res = await pr; clearTimeout(tmr); try { worker.terminate(); } catch(e) {error("worker中断错误", e)} try { URL.revokeObjectURL(blobUrl); } catch(e) {error("revokeObjectURL error in worker", e)}
                     if (res && res.ok && Array.isArray(res.warnings)) { for (const ww of res.warnings) warnings.push(ww); }
                     else if (timed2) warn('[plugin-worker-spawn] timeout for', item.meta.name || item.idx);
                 } catch (e) { warn('[plugin-worker-spawn] failed:', e); }
@@ -1723,7 +1744,7 @@ function fallbackCopyTextToClipboard(text) {
                         const parsedData = { contentType, parsedBody: null, rawBody: '', size: contentLength };
                         const warnings = await checkResponseContent(parsedData, { status: response.status, durationMs: 0 });
                         if (warnings.length > 0) {
-                            const message = warnings.join('\n******\n');
+                            const message = warnings.join('\n');
                             showAlert(message, {
                                 url,
                                 status: response.status,
@@ -1813,8 +1834,8 @@ function fallbackCopyTextToClipboard(text) {
 
             // 立即返回，避免阻塞长连接/流式请求
             return response;
-        } catch (error) {
-            error('HTTP监控错误:', error);
+        } catch (e) {
+            error('HTTP监控错误:', e);
             return originalFetch.apply(this, args);
         }
     };
@@ -1888,8 +1909,8 @@ function fallbackCopyTextToClipboard(text) {
                             });
                         }
                     }
-                } catch (error) {
-                    error('XHR Hook Error:', error);
+                } catch (e) {
+                    error('XHR Hook Error:', e);
                 }
             });
         }
@@ -2290,7 +2311,7 @@ function fallbackCopyTextToClipboard(text) {
                                 </div>\n
                                 <div class=\"plugin-code-wrapper\"> \n
                                 <pre class=\"plugin-code-overlay\"></pre>\n
-                                <textarea class=\"http-monitor-config-textarea plugin-code\" placeholder=\"// 仅填写主体，无需 function/return\\n//warnings是数组，用来存放告警文本\\n// 可用: httpStatus, durationMs, sizeBytes, body, rawBody, contentType\\nif (httpStatus >= 500) {\\n  warnings.push('服务异常');\\n}\">${(CONFIG.pluginsSource && CONFIG.pluginsSource[index]) || ''}</textarea>\n<div>\n</div>\n `).join('')}
+                                <textarea class=\"http-monitor-config-textarea plugin-code\" placeholder=\"// 仅填写主体，无需 function/return\\n// warnings是数组，用来存放告警文本\\n// 可用: httpStatus, durationMs, sizeBytes, body, rawBody, contentType\\nif (httpStatus >= 500) {\\n  warnings.push('服务异常');\\n}\">${(CONFIG.pluginsSource && CONFIG.pluginsSource[index]) || ''}</textarea>\n<div>\n</div>\n `).join('')}
                     </div>
                     <div class="plugin-toolbar" style="margin-top:8px;">
                         <button id="add-plugin-btn" class="http-monitor-config-btn-reset">添加插件</button>
@@ -2484,9 +2505,9 @@ function fallbackCopyTextToClipboard(text) {
             setTimeout(() => { try { okDiv.remove(); } catch { } }, 2000);
 
             log('配置已更新:', CONFIG);
-        } catch (error) {
-            error('保存配置失败:', error);
-            showAlert('保存配置失败: ' + error.message, null);
+        } catch (e) {
+            error('保存配置失败:', e);
+            showAlert('保存配置失败: ' + e.message, null);
         }
     }
 
@@ -2732,7 +2753,7 @@ function fallbackCopyTextToClipboard(text) {
                     </div>
                     <div class="plugin-code-wrapper">
                         <pre class="plugin-code-overlay"></pre>
-                        <textarea class="http-monitor-config-textarea plugin-code" placeholder="// 仅填写主体，无需 function/return\n//warnings是数组，用来存放告警文本\n// 可用: httpStatus, durationMs, sizeBytes, body, rawBody, contentType\nif (httpStatus >= 500) {\n  warnings.push('服务异常');\n}"></textarea>
+                        <textarea class="http-monitor-config-textarea plugin-code" placeholder="// 仅填写主体，无需 function/return\n// warnings是数组，用来存放告警文本\n// 可用: httpStatus, durationMs, sizeBytes, body, rawBody, contentType\nif (httpStatus >= 500) {\n  warnings.push('服务异常');\n}"></textarea>
                     </div>
                 `;
                 const removeBtn = wrapper.querySelector('.remove-plugin-btn');
