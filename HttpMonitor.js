@@ -1,121 +1,19 @@
 // ==UserScript==
 // @name         HTTP监控器
 // @namespace    http://tampermonkey.net/
-// @version      0.5
+// @version      0.6
 // @description  监控HTTP请求并弹窗警告
 // @author       Galio
 // @match        *://*/*
-// @icon         data:image/x-icon;base64,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
+// @icon         data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBzdGFuZGFsb25lPSJubyI/PjwhRE9DVFlQRSBzdmcgUFVCTElDICItLy9XM0MvL0RURCBTVkcgMS4xLy9FTiIgImh0dHA6Ly93d3cudzMub3JnL0dyYXBoaWNzL1NWRy8xLjEvRFREL3N2ZzExLmR0ZCI+PHN2ZyB0PSIxNzU4Mzg3NzA2NzI3IiBjbGFzcz0iaWNvbiIgdmlld0JveD0iMCAwIDEwMjQgMTAyNCIgdmVyc2lvbj0iMS4xIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHAtaWQ9IjU3NjkiIHdpZHRoPSI0OCIgaGVpZ2h0PSI0OCIgeG1sbnM6eGxpbms9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkveGxpbmsiPjxwYXRoIGQ9Ik00ODYuNCAyNS42QTM4My4xMjk2IDM4My4xMjk2IDAgMCAwIDEwMi40IDQwOS42YzAgMjEyLjczNiAxNzEuMjY0IDM4NCAzODQgMzg0IDIxMi43MzYgMCAzODQtMTcxLjI2NCAzODQtMzg0Qzg3MC40IDE5Ni44NjQgNjk5LjEzNiAyNS42IDQ4Ni40IDI1LjZ6IG0wIDY3NC42MTEyYy0xMTkuMzQ3MiAwLTIxNy45NTg0LTk4LjYxMTItMjE3Ljk1ODQtMjE3Ljk1ODQgMC0xMTkuMzQ3MiA5OC42MTEyLTIxNy45NTg0IDIxNy45NTg0LTIxNy45NTg0IDExOS4zNDcyIDAgMjE3Ljk1ODQgOTguNjExMiAyMTcuOTU4NCAyMTcuOTU4NCAwIDExOS4zNDcyLTk4LjYxMTIgMjE3Ljk1ODQtMjE3Ljk1ODQgMjE3Ljk1ODR6IG0wLTMzMi4xMzQ0Yy02Ny40ODE2IDAtMTE5LjM0NzIgNTEuOTE2OC0xMTkuMzQ3MiAxMTkuMzQ3MiAwIDY3LjQ4MTYgNTEuODY1NiAxMTkuMzQ3MiAxMTkuMzQ3MiAxMTkuMzQ3MnMxMTkuMzQ3Mi01MS44NjU2IDExOS4zNDcyLTExOS4yOTZjMC02Ny40ODE2LTUxLjg2NTYtMTE5LjM5ODQtMTE5LjM0NzItMTE5LjM5ODR6IiBmaWxsPSIjMjhCQzg1IiBwLWlkPSI1NzcwIj48L3BhdGg+PHBhdGggZD0iTTc5NS45NTUyIDc0Mi40Yy03My45MzI4IDY4LjI0OTYtMTc0LjMzNiAxMTMuNzY2NC0yODUuMjM1MiAxMTMuNzY2NC0xMTAuOTUwNCAwLTIxMS4zNTM2LTQ1LjUxNjgtMjg1LjI4NjQtMTEzLjc2NjRsLTY4LjY1OTIgMTU5LjI4MzJjLTUuMjczNiAxNy4wNDk2LTUuMjczNiAzNC4xNTA0IDEwLjU0NzIgNTEuMiAyMS4xNDU2IDI4LjQ2NzIgNTguMTEyIDQ1LjUxNjggMTA1LjY3NjggNDUuNTE2OGg0ODAuNzE2OGMzNi45NjY0IDAgODQuNDgtMTEuMzY2NCAxMDUuNjI1Ni00NS41MTY4IDEwLjU5ODQtMTcuMDQ5NiAxNS44NzItMzQuMTUwNCA1LjMyNDgtNTEuMkw3OTUuOTU1MiA3NDIuNHoiIGZpbGw9IiMyOEJDODUiIHAtaWQ9IjU3NzEiPjwvcGF0aD48L3N2Zz4=
 // @grant        GM_registerMenuCommand
 // @run-at       document-start
 // @updateURL    https://raw.githubusercontent.com/Baicor/TampermonkeyScriptsBox/refs/heads/master/HttpMonitor.js    
 // ==/UserScript==
 
 // 创建样式
-function createStyles() {
-    const style = document.createElement('style');
-    style.textContent = `
-            .http-monitor-alert {
-                position: fixed !important;
-                top: 20px !important;
-                right: 20px !important;
-                background: #ff4444 !important;
-                color: white !important;
-                padding: 15px !important;
-                border-radius: 8px !important;
-                z-index: 999999 !important;
-                font-family: Arial, sans-serif !important;
-                font-size: 14px !important;
-                max-width: 400px !important;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
-                border-left: 4px solid #ff0000 !important;
-                animation: slideIn 0.3s ease-out !important;
-                transition: all 0.2s ease !important;
-            }
-
-            .http-monitor-alert:hover {
-                box-shadow: 0 6px 25px rgba(0,0,0,0.4) !important;
-                transform: translateY(-2px) !important;
-            }
-
-            @keyframes slideIn {
-                from {
-                    transform: translateX(100%);
-                    opacity: 0;
-                }
-                to {
-                    transform: translateX(0);
-                    opacity: 1;
-                }
-            }
-
-            .http-monitor-close {
-                float: right !important;
-                font-size: 18px !important;
-                font-weight: bold !important;
-                cursor: pointer !important;
-                margin-left: 10px !important;
-            }
-
-            .http-monitor-close:hover {
-                opacity: 0.7 !important;
-            }
-
-            .http-monitor-copy {
-                background: rgba(255,255,255,0.2) !important;
-                border: 1px solid rgba(255,255,255,0.3) !important;
-                color: white !important;
-                padding: 4px 8px !important;
-                border-radius: 4px !important;
-                cursor: pointer !important;
-                font-size: 12px !important;
-                margin-left: 8px !important;
-                transition: background 0.2s !important;
-            }
-
-            .http-monitor-copy:hover {
-                background: rgba(255,255,255,0.3) !important;
-            }
-            .http-monitor-title {
-                font-size: 18px !important;
-                font-weight: 700 !important;
-                margin: 2px 0 10px 0 !important;
-                color: #fff !important;
-                border-bottom: 1px solid rgba(255,255,255,0.35) !important;
-                padding-bottom: 6px !important;
-            }
-            .http-monitor-section { margin-top: 12px !important; }
-            .http-monitor-section-title {
-                display: flex !important;
-                align-items: center !important;
-                gap: 8px !important;
-                font-size: 14px !important;
-                font-weight: 700 !important;
-                letter-spacing: 0.3px !important;
-                opacity: 0.98 !important;
-                margin-bottom: 6px !important;
-                color: #fff !important;
-            }
-            .http-monitor-section-title::before {
-                content: '' !important;
-                display: inline-block !important;
-                width: 4px !important;
-                height: 14px !important;
-                background: rgba(255,255,255,0.95) !important;
-                border-radius: 2px !important;
-            }
-            .http-monitor-section-body {
-                font-size: 12px !important;
-                line-height: 1.5 !important;
-                white-space: pre-line !important;
-                word-break: break-word !important;
-                background: rgba(255,255,255,0.12) !important;
-                border-left: 3px solid rgba(255,255,255,0.35) !important;
-                padding: 8px 10px !important;
-                border-radius: 4px !important;
-            }
-            .http-monitor-actions { margin-top: 12px !important; display: flex !important; justify-content: flex-end !important; }
-
+function createEnterButtonStyle() {
+    const textContent = `
             .http-monitor-config-btn {
                 position: fixed !important;
                 top: 20px !important;
@@ -163,499 +61,9 @@ function createStyles() {
                 transform: scale(1.05) !important;
                 box-shadow: transparent !important;
             }
-
-            .http-monitor-config-modal {
-                position: fixed !important;
-                top: 0 !important;
-                left: 0 !important;
-                width: 100% !important;
-                height: 100% !important;
-                background: rgba(0,0,0,0.5) !important;
-                z-index: 1000000 !important;
-                display: flex !important;
-                justify-content: center !important;
-                align-items: flex-start !important;
-                overflow: auto !important;
-                padding: 40px 20px !important;
-            }
-
-            .http-monitor-config-content {
-                top: 0;
-                background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%) !important;
-                padding: 30px !important;
-                border-radius: 12px !important;
-                width: min(90vw, 900px) !important;
-                height: auto !important;
-                max-height: none !important;
-                overflow: visible !important;
-                box-shadow: 0 10px 40px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05) !important;
-                color: #2c3e50 !important;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif !important;
-                /* 允许自由调节大小 */
-                resize: both !important;
-                min-width: 450px !important;
-                min-height: 400px !important;
-                backdrop-filter: blur(10px) !important;
-            }
-
-            .http-monitor-config-header {
-                display: flex !important;
-                justify-content: space-between !important;
-                align-items: center !important;
-                margin-bottom: 25px !important;
-                border-bottom: 2px solid #e9ecef !important;
-                padding-bottom: 15px !important;
-            }
-
-            .http-monitor-config-title {
-                font-size: 22px !important;
-                font-weight: 600 !important;
-                margin: 0 !important;
-                color: #1a1a1a !important;
-                letter-spacing: -0.5px !important;
-            }
-
-            .http-monitor-config-close {
-                background: none !important;
-                border: none !important;
-                font-size: 28px !important;
-                cursor: pointer !important;
-                color: #6c757d !important;
-                transition: color 0.2s ease !important;
-                padding: 4px !important;
-                border-radius: 4px !important;
-            }
-
-            .http-monitor-config-close:hover {
-                color: #495057 !important;
-                background: rgba(108, 117, 125, 0.1) !important;
-            }
-
-            .http-monitor-config-group {
-                margin-bottom: 24px !important;
-                padding: 16px !important;
-                background: rgba(255, 255, 255, 0.7) !important;
-                border-radius: 8px !important;
-                border: 1px solid rgba(0, 0, 0, 0.08) !important;
-                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04) !important;
-                transition: all 0.2s ease !important;
-            }
-
-            .http-monitor-config-group:hover {
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
-                border-color: rgba(0, 0, 0, 0.12) !important;
-            }
-
-            .http-monitor-config-label {
-                display: block !important;
-                margin-bottom: 8px !important;
-                font-weight: 600 !important;
-                color: #2c3e50 !important;
-                font-size: 15px !important;
-            }
-
-            .http-monitor-config-input {
-                width: 100% !important;
-                max-width: 100% !important;
-                display: block !important;
-                box-sizing: border-box !important;
-                padding: 10px 10px !important;
-                border: 1px solid #ced4da !important;
-                border-radius: 6px !important;
-                font-size: 14px !important;
-                box-sizing: border-box !important;
-                background: #ffffff !important;
-                transition: all 0.2s ease !important;
-                color: #495057 !important;
-            }
-
-            .http-monitor-config-input:focus {
-                border-color: #2196F3 !important;
-                box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1) !important;
-                outline: none !important;
-            }
-
-            .http-monitor-config-textarea {
-                width: 100% !important;
-                padding: 12px !important;
-                border: 1px solid #ced4da !important;
-                border-radius: 6px !important;
-                font-size: 14px !important;
-                box-sizing: border-box !important;
-                min-height: 100px !important;
-                resize: vertical !important;
-                background: #ffffff !important;
-                transition: all 0.2s ease !important;
-                color: #495057 !important;
-                line-height: 1.5 !important;
-            }
-
-            .http-monitor-config-textarea:focus {
-                border-color: #2196F3 !important;
-                box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1) !important;
-                outline: none !important;
-            }
-            .plugin-code-fullscreen {
-                position: fixed !important;
-                z-index: 1000001 !important;
-                top: 0 !important;
-                left: 0 !important;
-                width: 100vw !important;
-                height: 100vh !important;
-                margin: 0 !important;
-                border-radius: 0 !important;
-                background: #ffffff !important;
-            }
-
-            .http-monitor-config-checkbox {
-                margin-right: 8px !important;
-                width: 16px !important;
-                height: 16px !important;
-                accent-color: #2196F3 !important;
-                cursor: pointer !important;
-            }
-
-            .http-monitor-config-checkbox:checked {
-                background-color: #2196F3 !important;
-            }
-
-            .http-monitor-config-buttons {
-                display: flex !important;
-                gap: 12px !important;
-                justify-content: flex-end !important;
-                margin-top: 30px !important;
-                padding-top: 20px !important;
-                border-top: 1px solid #e9ecef !important;
-            }
-
-            .http-monitor-config-btn-save,
-            .http-monitor-config-btn-cancel,
-            .http-monitor-config-btn-clear,
-            .http-monitor-config-btn-reset {
-                color: white !important;
-                border: none !important;
-                padding: 12px 24px !important;
-                border-radius: 8px !important;
-                cursor: pointer !important;
-                font-size: 14px !important;
-                font-weight: 500 !important;
-                transition: all 0.2s ease !important;
-                box-shadow: 0 2px 6px rgba(0,0,0,0.1) !important;
-                min-width: 100px !important;
-                text-align: center !important;
-            }
-
-            .http-monitor-config-btn-save {
-                background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%) !important;
-            }
-
-            .http-monitor-config-btn-save:hover {
-                background: linear-gradient(135deg, #45a049 0%, #3d8b40 100%) !important;
-                box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3) !important;
-                transform: translateY(-1px) !important;
-            }
-
-            .http-monitor-config-btn-cancel {
-                background: linear-gradient(135deg, #f44336 0%, #da190b 100%) !important;
-            }
-
-            .http-monitor-config-btn-cancel:hover {
-                background: linear-gradient(135deg, #da190b 0%, #c62828 100%) !important;
-                box-shadow: 0 4px 12px rgba(244, 67, 54, 0.3) !important;
-                transform: translateY(-1px) !important;
-            }
-
-            .http-monitor-config-btn-clear {
-                background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%) !important;
-            }
-
-            .http-monitor-config-btn-clear:hover {
-                background: linear-gradient(135deg, #5a6268 0%, #495057 100%) !important;
-                box-shadow: 0 4px 12px rgba(108, 117, 125, 0.3) !important;
-                transform: translateY(-1px) !important;
-            }
-
-            .http-monitor-config-btn-reset {
-                background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%) !important;
-            }
-
-            .http-monitor-config-btn-reset:hover {
-                background: linear-gradient(135deg, #F57C00 0%, #EF6C00 100%) !important;
-                box-shadow: 0 4px 12px rgba(255, 152, 0, 0.3) !important;
-                transform: translateY(-1px) !important;
-            }
-
-            .http-monitor-config-method-list {
-                display: flex !important;
-                flex-wrap: wrap !important;
-                gap: 12px !important;
-                padding: 12px !important;
-                background: rgba(255, 255, 255, 0.6) !important;
-                border-radius: 8px !important;
-                border: 1px solid rgba(0, 0, 0, 0.08) !important;
-            }
-
-            .http-monitor-config-method-item {
-                display: flex !important;
-                align-items: center !important;
-                padding: 8px 12px !important;
-                background: rgba(33, 150, 243, 0.1) !important;
-                border-radius: 6px !important;
-                border: 1px solid rgba(33, 150, 243, 0.2) !important;
-                transition: all 0.2s ease !important;
-            }
-
-            .http-monitor-config-method-item:hover {
-                background: rgba(33, 150, 243, 0.15) !important;
-                border-color: rgba(33, 150, 243, 0.3) !important;
-            }
-
-            .http-monitor-config-url-patterns {
-                max-height: 140px !important;
-                overflow-y: auto !important;
-                border: 1px solid rgba(0, 0, 0, 0.1) !important;
-                border-radius: 8px !important;
-                padding: 16px !important;
-                background: linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(249, 249, 249, 0.9) 100%) !important;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
-                margin-bottom: 16px !important;
-                backdrop-filter: blur(5px) !important;
-            }
-
-            .http-monitor-config-url-pattern {
-                display: flex !important;
-                align-items: center !important;
-                margin-bottom: 10px !important;
-                gap: 8px !important;
-                padding: 8px !important;
-                background: rgba(255, 255, 255, 0.8) !important;
-                border-radius: 6px !important;
-                border: 1px solid rgba(0, 0, 0, 0.06) !important;
-                transition: all 0.2s ease !important;
-            }
-
-            .http-monitor-config-url-pattern:hover {
-                background: rgba(255, 255, 255, 0.95) !important;
-                border-color: rgba(0, 0, 0, 0.1) !important;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.05) !important;
-            }
-
-            .http-monitor-config-url-pattern input {
-                flex: 1 !important;
-                margin-right: 0 !important;
-                background: transparent !important;
-                border: 1px solid rgba(0, 0, 0, 0.1) !important;
-                border-radius: 4px !important;
-                padding: 8px 12px !important;
-                font-size: 13px !important;
-            }
-
-            .http-monitor-config-url-pattern input:focus {
-                border-color: #2196F3 !important;
-                box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.1) !important;
-                outline: none !important;
-            }
-
-            .http-monitor-config-url-pattern button {
-                background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%) !important;
-                color: white !important;
-                border: none !important;
-                padding: 6px 12px !important;
-                border-radius: 4px !important;
-                cursor: pointer !important;
-                font-size: 12px !important;
-                font-weight: 500 !important;
-                transition: all 0.2s ease !important;
-                min-width: 60px !important;
-            }
-
-            .http-monitor-config-url-pattern button:hover {
-                background: linear-gradient(135deg, #d32f2f 0%, #c62828 100%) !important;
-                transform: translateY(-1px) !important;
-                box-shadow: 0 2px 6px rgba(244, 67, 54, 0.3) !important;
-            }
-
-            /* 轻量编辑器与高亮 */
-            .plugin-item {
-                border: 1px solid #eee !important;
-                border-radius: 6px !important;
-                padding: 8px !important;
-                margin-bottom: 8px !important;
-            }
-            .plugin-item.http-monitor-conflict {
-                border-color: #f44336 !important;
-                box-shadow: 0 0 0 2px rgba(244,67,54,0.15) !important;
-            }
-            .plugin-toolbar {
-                display: flex !important;
-                gap: 8px !important;
-                margin-top: 6px !important;
-                justify-content: flex-end !important;
-                flex-wrap: wrap !important;
-            }
-            .plugin-header {
-                display: flex !important;
-                align-items: center !important;
-                gap: 8px !important;
-                margin-bottom: 6px !important;
-                flex-wrap: wrap !important;
-            }
-            .plugin-header .plugin-name { flex: 1 1 200px !important; min-width: 160px !important; }
-            .plugin-header .plugin-toolbar { margin-top: 0 !important; }
-            .plugin-header label { margin: 0 !important; white-space: nowrap !important; }
-            .plugin-toolbar button {
-                background: linear-gradient(180deg, rgba(255,255,255,0.65), rgba(255,255,255,0.3)) !important;
-                border: 1px solid rgba(124,58,237,0.28) !important;
-                color: #0f172a !important;
-                padding: 8px 12px !important;
-                border-radius: 12px !important;
-                cursor: pointer !important;
-                font-size: 12px !important;
-                font-weight: 700 !important;
-                letter-spacing: 0.2px !important;
-                transition: transform .12s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease, color .12s ease !important;
-                backdrop-filter: blur(6px) !important;
-            }
-            .plugin-toolbar button:hover {
-                background: linear-gradient(180deg, rgba(124,58,237,0.12), rgba(6,182,212,0.12)) !important;
-                border-color: rgba(124,58,237,0.45) !important;
-                transform: translateY(-1px) !important;
-                box-shadow: 0 8px 16px rgba(15,23,42,0.12) !important;
-                color: #111827 !important;
-            }
-
-            .plugin-code-wrapper {
-                position: relative !important;
-                width: 100% !important;
-                gap: 8px !important;
-                margin-top: 10px !important;
-            }
-            .plugin-code-overlay {
-                position: absolute !important;
-                inset: 0 !important;
-                margin: 0 !important;
-                overflow: auto !important;
-                white-space: pre-wrap !important;
-                word-wrap: break-word !important;
-                padding: 8px !important;
-                border: 1px solid #ddd !important;
-                border-radius: 4px !important;
-                background: #f7f7f7 !important;
-                color: #333 !important;
-                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
-                font-size: 12px !important;
-                tab-size: 2 !important;
-                pointer-events: none !important;
-            }
-            .plugin-code {
-                position: relative !important;
-                background: transparent !important;
-                color: transparent !important;
-                caret-color: #111 !important;
-                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
-                font-size: 12px !important;
-                line-height: 1.5 !important;
-            }
-
-            .plugin-code-fullscreen {
-                position: fixed !important;
-                z-index: 1000001 !important;
-                top: 0 !important;
-                left: 0 !important;
-                width: 100vw !important;
-                height: 100vh !important;
-                margin: 0 !important;
-                border-radius: 0 !important;
-                background: #ffffff !important;
-                padding: 12px !important;
-            }
-            /* 全屏时显示真实文本并允许编辑；隐藏高亮层 */
-            .plugin-code.plugin-code-fullscreen {
-                color: #111 !important;
-                background: #fff !important;
-                position: fixed !important;
-                z-index: 1000002 !important;
-                top: 0 !important;
-                left: 0 !important;
-                width: 100vw !important;
-                height: 100vh !important;
-                margin: 0 !important;
-                border-radius: 0 !important;
-                padding: 12px !important;
-            }
-            .plugin-code-overlay.plugin-code-fullscreen {
-                display: none !important;
-            }
-
-            /* 自定义插件列表更舒展的布局 */
-            .plugin-list {
-                max-height: 50vh !important;
-                overflow-y: auto !important;
-                border: 1px solid #eee !important;
-                border-radius: 6px !important;
-                padding: 8px !important;
-                background: #ffffff !important;
-            }
-            .plugin-row {
-                display: flex !important;
-                align-items: center !important;
-                gap: 8px !important;
-                margin-bottom: 6px !important;
-            }
-            .plugin-row .plugin-name {
-                flex: 1 1 auto !important;
-            }
-            .plugin-row label {
-                margin: 0 !important;
-                white-space: nowrap !important;
-            }
-
-            /* 移除高亮：改为在 Shadow DOM 内定义，避免重复 */
-
-            .http-monitor-config-body::-webkit-scrollbar { width: 10px; }
-            .http-monitor-config-body::-webkit-scrollbar-thumb { background: linear-gradient(#7c3aed, #06b6d4); border-radius: 999px; }
-            .http-monitor-config-body::-webkit-scrollbar-track { background: rgba(15,23,42,0.05); border-radius: 999px; }
-
-            /* 配置弹窗相关样式已迁移至 Shadow DOM（见 MODAL_CSS） */
-
-            /* === OVERRIDES (ordered last) === */
-            .http-monitor-config-input,
-            .http-monitor-config-textarea,
-            select.plugin-exec-mode,
-            input.plugin-timeout { box-sizing: border-box; max-width: 100%; width: 100%; display: block; }
-            .plugin-header .http-monitor-config-input { min-width: 0; }
-
-            .http-monitor-config-textarea.plugin-code,
-            .plugin-code { width: 100%; box-sizing: border-box; resize: vertical !important; min-height: 380px; line-height: 1.6; }
-            .plugin-code-wrapper, .plugin-code-overlay { width: 100%; box-sizing: border-box; }
-            .plugin-code-overlay { min-height: 380px; }
-
-            .plugin-toolbar { display: flex; gap: 10px; justify-content: flex-start; margin: 0; }
-            .plugin-toolbar button {
-                background: linear-gradient(180deg, rgba(255,255,255,0.65), rgba(255,255,255,0.3));
-                border: 1px solid rgba(124,58,237,0.28);
-                color: #0f172a;
-                padding: 8px 12px;
-                border-radius: 12px;
-                cursor: pointer;
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 0.2px;
-                transition: transform .12s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease, color .12s ease;
-                backdrop-filter: blur(6px);
-            }
-            .plugin-toolbar button:hover {
-                background: linear-gradient(180deg, rgba(124,58,237,0.12), rgba(6,182,212,0.12));
-                border-color: rgba(124,58,237,0.45);
-                transform: translateY(-1px);
-                box-shadow: 0 8px 16px rgba(15,23,42,0.12);
-                color: #111827;
-            }
-            .plugin-toolbar .remove-plugin-btn { border-color: rgba(239,68,68,0.35); }
-            .plugin-toolbar .remove-plugin-btn:hover { background: linear-gradient(180deg, rgba(239,68,68,0.12), rgba(244,63,94,0.12)); border-color: rgba(239,68,68,0.5); }
         `;
-    document.head.appendChild(style);
-    return style;
+    injectStyles(null, textContent)
+
 }
 
 // 统一样式注入方法：可注入到 document 或任意 ShadowRoot
@@ -764,15 +172,16 @@ function formatBytes(bytes) {
 }
 
 function initMenu(){
-    GM_registerMenuCommand("在本站关闭HttpMointor", function(){
-        localStorage.setItem("httpMonitorHide", 0);
-        location.reload();
-    }, "G");
 
-    GM_registerMenuCommand("在本站启用HttpMointor", function(){
-        localStorage.setItem("httpMonitorHide", 1);
+    const registerMenu = function(name, value, key){
+        GM_registerMenuCommand(name, function(){
+        localStorage.setItem("httpMonitorHide", value);
         location.reload();
-    }, "K");
+    }, key);
+    };
+
+    registerMenu("在本站关闭HttpMointor", 0, "G")
+    registerMenu("在本站开启HttpMointor", 1, "K")
 }
 
 
@@ -842,7 +251,7 @@ function __log(handler, ...data){
     if (CONFIG.verbose) handler("[http-monitor]", ...data)
 }
 
-function log(...data) {
+function info(...data) {
     __log(console.log, ...data)
 }
 
@@ -856,17 +265,17 @@ function error(...data){
 
 // 从localStorage加载配置
 function loadConfig() {
-    log('开始加载配置...');
+    info('开始加载配置...');
 
     const saved = localStorage.getItem('httpMonitorConfig');
     if (saved) {
         try {
             const parsed = JSON.parse(saved);
-            log('从localStorage加载的配置:', parsed);
+            info('从localStorage加载的配置:', parsed);
 
             // 保持 CONFIG 引用不变，避免外部引用失效
             Object.assign(CONFIG, parsed);
-            log('合并后的配置:', CONFIG);
+            info('合并后的配置:', CONFIG);
 
             // 反序列化插件
             if (Array.isArray(CONFIG.pluginsSource)) {
@@ -884,7 +293,7 @@ function loadConfig() {
             warn('配置加载失败，使用默认配置:', e);
         }
     } else {
-        log('没有找到保存的配置，使用默认配置');
+        info('没有找到保存的配置，使用默认配置');
     }
 
     // 若存在自定义插件但缺少元信息，补齐默认 meta（名称唯一、启用）
@@ -907,18 +316,18 @@ function loadConfig() {
 
 // 检查URL是否匹配监控模式
 function shouldMonitor(url) {
-    log('检查URL:', url);
-    log('URL Pattern:', CONFIG.urlPatterns);
+    info('检查URL:', url);
+    info('URL Pattern:', CONFIG.urlPatterns);
 
     const result = CONFIG.urlPatterns.some(p => {
         if (!(p instanceof RegExp)) { warn('urlPatterns 非正则项被忽略:', p); return false; }
         try { p.lastIndex = 0; } catch { }
         const matches = p.test(url);
-        log(`正则匹配: ${p} -> ${url} = ${matches}`);
+        info(`正则匹配: ${p} -> ${url} = ${matches}`);
         return matches;
     });
 
-    log('最终结果:', result);
+    info('最终结果:', result);
     return result;
 }
 
@@ -988,14 +397,14 @@ function saveConfig() {
 function copyToClipboard(text) {
     if (navigator.clipboard && window.isSecureContext) {
         navigator.clipboard.writeText(text).then(() => {
-            log('已复制到剪贴板');
+            info('已复制到剪贴板');
             return true;
         }).catch(err => {
             error('现代API复制失败:', err);
             return fallbackCopyTextToClipboard(text);
         });
     } else {
-        log('使用备用复制方法');
+        info('使用备用复制方法');
         return fallbackCopyTextToClipboard(text);
     }
 }
@@ -1016,7 +425,7 @@ function fallbackCopyTextToClipboard(text) {
 
         const successful = document.execCommand('copy');
         if (successful) {
-            log('备用方法复制成功');
+            info('备用方法复制成功');
             return true;
         } else {
             error('备用方法复制失败');
@@ -1051,7 +460,7 @@ function fallbackCopyTextToClipboard(text) {
                 try {
                     const abs = toAbsoluteUrl(url);
                     if (shouldMonitor(abs)) {
-                        log('[sendBeacon]', abs, data);
+                        info('[sendBeacon]', abs, data);
                     }
                 } catch(e) {
                     error("record sendBeacon error", e)
@@ -1341,7 +750,7 @@ function fallbackCopyTextToClipboard(text) {
             });
             mo.observe(document.body, { childList: true, subtree: true });
 
-            log('HTTP响应监控:', message, responseData);
+            info('HTTP响应监控:', message, responseData);
         });
         processNextAlert();
     }
@@ -2546,15 +1955,15 @@ if (httpStatus >= 500) {
                             <div class=\"http-monitor-config-url-pattern plugin-item\" data-index=\"${index}\">\n\
                                 <div class=\"plugin-header\"> \n\
                                     <input type=\"text\" class=\"http-monitor-config-input plugin-name\" value=\"${(meta.name || '').replace(/\\"/g, '&quot;')}\" placeholder=\"插件名称（唯一）\"> \n\
-                                    <label><input type=\"checkbox\" class=\"plugin-enabled\" ${meta.enabled !== false ? 'checked' : ''}> 启用</label>\n\
+                                    <label><input type=\"checkbox\" class=\"plugin-enabled\" ${meta.enabled !== false ? 'checked' : ''}><b>启用</b></label>\n\
                                     <label>\n\
-                                        <label>执行模式</label>\n\
+                                        <label><b>执行模式:</b></label>\n\
                                         <select class=\"plugin-exec-mode\"> \n\
                                         <option value=\"inherit\" ${meta.executionMode === 'inherit' || !meta.executionMode ? 'selected' : ''}>继承</option>\n\
                                         <option value=\"reuse\" ${meta.executionMode === 'reuse' ? 'selected' : ''}>重用Worker</option>\n\
                                         <option value=\"spawn\" ${meta.executionMode === 'spawn' ? 'selected' : ''}>重建Worker</option>\n\
                                         </select>\n\
-                                        <label>超时(ms)</label>\n\
+                                        <label><b>超时(ms):</b></label>\n\
                                         <input type=\"number\" class=\"plugin-timeout\" value=\"${typeof meta.timeoutMs === 'number' ? meta.timeoutMs : ''}\" placeholder=\"继承全局\">\n\
                                     </label>\n\
                                 </div>\n\
@@ -2729,9 +2138,6 @@ if (httpStatus >= 500) {
             // 再次标准化 urlPatterns
             ensureUrlPatterns();
 
-            // 关闭弹窗
-            window.httpMonitorCloseConfig();
-
             // 显示成功消息（绿色 Toast，避免被 .http-monitor-alert 的红色样式覆盖）
             const okDiv = document.createElement('div');
             okDiv.className = 'http-monitor-toast';
@@ -2754,7 +2160,7 @@ if (httpStatus >= 500) {
             document.body.appendChild(okDiv);
             setTimeout(() => { try { okDiv.remove(); } catch { } }, 2000);
 
-            log('配置已更新:', CONFIG);
+            info('配置已更新:', CONFIG);
         } catch (e) {
             error('保存配置失败:', e);
             showAlert('保存配置失败: ' + e.message, null);
@@ -2982,17 +2388,17 @@ if (httpStatus >= 500) {
                 wrapper.innerHTML = `
                     <div class="plugin-header">
                         <input type="text" class="http-monitor-config-input plugin-name" value="" placeholder="插件名称（唯一）">
-                        <label><input type="checkbox" class="plugin-enabled" checked> 启用</label>
+                        <label><input type="checkbox" class="plugin-enabled" checked><b>启用</b></label>
                     </div>
                     <div class="plugin-header">
                         <label style="width:100%; height:100%;">
-                            <label>执行模式</label>
+                            <label><b>执行模式:</b></label>
                             <select class="plugin-exec-mode">
                             <option value="inherit" selected>继承</option>
                             <option value="reuse">重用Worker</option>
                             <option value="spawn">重建Worker</option>
                             </select>
-                            <label>超时(ms)</label>
+                            <label><b>超时(ms):</b></label>
                             <input type="number" class="plugin-timeout" placeholder="默认继承全局">
                         </label>
                     </div>
@@ -3097,7 +2503,8 @@ if (httpStatus >= 500) {
             exportAllBtn.id = 'config-export-all';
             exportAllBtn.className = 'http-monitor-config-btn-reset';
             exportAllBtn.textContent = '导出所有配置';
-            buttonsBar.appendChild(exportAllBtn);
+            // buttonsBar.appendChild(exportAllBtn);
+            buttonsBar.prepend(exportAllBtn)
             exportAllBtn.addEventListener('click', () => {
                 try {
                     const blob = new Blob([JSON.stringify(CONFIG, null, 2)], { type: 'application/json;charset=utf-8' });
@@ -3120,8 +2527,8 @@ if (httpStatus >= 500) {
             importAllFile.type = 'file';
             importAllFile.accept = 'application/json';
             importAllFile.style.display = 'none';
-            buttonsBar.appendChild(importAllBtn);
-            buttonsBar.appendChild(importAllFile);
+            buttonsBar.prepend(importAllBtn);
+            buttonsBar.prepend(importAllFile);
             importAllBtn.addEventListener('click', () => { importAllFile.value = ''; importAllFile.click(); });
             importAllFile.addEventListener('change', async () => {
                 const file = importAllFile.files && importAllFile.files[0];
@@ -3163,6 +2570,7 @@ if (httpStatus >= 500) {
 
     // 创建配置按钮
     function createConfigButton() {
+        createEnterButtonStyle();
         const button = document.createElement('button');
         button.className = 'http-monitor-config-btn';
         button.innerHTML = '<svg class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="6366" width="48" height="48" fill="none"><path d="M486.4 25.6A383.1296 383.1296 0 0 0 102.4 409.6c0 212.736 171.264 384 384 384 212.736 0 384-171.264 384-384C870.4 196.864 699.136 25.6 486.4 25.6z m0 674.6112c-119.3472 0-217.9584-98.6112-217.9584-217.9584 0-119.3472 98.6112-217.9584 217.9584-217.9584 119.3472 0 217.9584 98.6112 217.9584 217.9584 0 119.3472-98.6112 217.9584-217.9584 217.9584z m0-332.1344c-67.4816 0-119.3472 51.9168-119.3472 119.3472 0 67.4816 51.8656 119.3472 119.3472 119.3472s119.3472-51.8656 119.3472-119.296c0-67.4816-51.8656-119.3984-119.3472-119.3984z" fill="#28BC85" p-id="6367"></path><path d="M795.9552 742.4c-73.9328 68.2496-174.336 113.7664-285.2352 113.7664-110.9504 0-211.3536-45.5168-285.2864-113.7664l-68.6592 159.2832c-5.2736 17.0496-5.2736 34.1504 10.5472 51.2 21.1456 28.4672 58.112 45.5168 105.6768 45.5168h480.7168c36.9664 0 84.48-11.3664 105.6256-45.5168 10.5984-17.0496 15.872-34.1504 5.3248-51.2L795.9552 742.4z" fill="#28BC85" p-id="6368"></path></svg>';
@@ -3179,7 +2587,7 @@ if (httpStatus >= 500) {
         button.addEventListener('mousedown', (e) => {
             // 只有左键按下才启动拖动
             if (e.button === 0) {
-                log('开始拖动');
+                info('开始拖动');
                 isDragging = true;
                 hasMoved = false;
                 button.classList.add('dragging');
@@ -3246,7 +2654,7 @@ if (httpStatus >= 500) {
         // 鼠标释放事件
         document.addEventListener('mouseup', (e) => {
             if (isDragging) {
-                log('结束拖动, 是否移动:', hasMoved);
+                info('结束拖动, 是否移动:', hasMoved);
                 isDragging = false;
                 button.classList.remove('dragging');
 
@@ -3257,7 +2665,7 @@ if (httpStatus >= 500) {
                     y: rect.top
                 };
                 localStorage.setItem('httpMonitorButtonPosition', JSON.stringify(position));
-                log('位置已保存:', position);
+                info('位置已保存:', position);
 
                 // 如果移动了，阻止点击事件
                 if (hasMoved) {
@@ -3379,11 +2787,10 @@ if (httpStatus >= 500) {
     function init() {
         // 加载配置
         loadConfig();
-        createStyles();
         createConfigButton();
 
-        log('HTTP响应监控器已启动');
-        log('配置:', CONFIG);
+        info('HTTP响应监控器已启动');
+        info('配置:', CONFIG);
 
         // 添加全局复制函数（用于控制台命令）
         window.httpMonitorCopy = copyToClipboard;
@@ -3411,27 +2818,27 @@ if (httpStatus >= 500) {
             registerPlugin: (plugin) => {
                 if (typeof plugin === 'function') {
                     CONFIG.plugins.push(plugin);
-                    log('已注册插件');
+                    info('已注册插件');
                 } else {
                     warn('插件必须是函数');
                 }
             },
             // 清空自定义插件
-            clearPlugins: () => { CONFIG.plugins = []; log('自定义插件已清空'); },
-            enable: () => { CONFIG.enabled = true; saveConfig(); log('HTTP监控已启用'); },
-            disable: () => { CONFIG.enabled = false; saveConfig(); log('HTTP监控已禁用'); },
+            clearPlugins: () => { CONFIG.plugins = []; info('自定义插件已清空'); },
+            enable: () => { CONFIG.enabled = true; saveConfig(); info('HTTP监控已启用'); },
+            disable: () => { CONFIG.enabled = false; saveConfig(); info('HTTP监控已禁用'); },
             addUrlPattern: (pattern) => {
                 const regex = new RegExp(pattern);
                 CONFIG.urlPatterns.push(regex);
                 saveConfig();
-                log('已添加URL模式:', pattern);
+                info('已添加URL模式:', pattern);
             },
             removeUrlPattern: (pattern) => {
                 const index = CONFIG.urlPatterns.findIndex(p => p.toString() === pattern);
                 if (index > -1) {
                     CONFIG.urlPatterns.splice(index, 1);
                     saveConfig();
-                    log('已移除URL模式:', pattern);
+                    info('已移除URL模式:', pattern);
                 }
             },
             showConfig: showConfigModal,
@@ -3447,15 +2854,15 @@ if (httpStatus >= 500) {
                     if (modal) {
                         modal.style.setProperty('display', 'none', 'important');
                     }
-                    log('配置窗口已关闭');
+                    info('配置窗口已关闭');
                     return;
                 }
-                log('配置窗口未找到');
+                info('配置窗口未找到');
             },
-            reloadConfig: () => { loadConfig(); log('配置已重新加载'); },
+            reloadConfig: () => { loadConfig(); info('配置已重新加载'); },
             clearConfig: () => {
                 localStorage.removeItem('httpMonitorConfig');
-                log('配置已清除，将使用默认配置');
+                info('配置已清除，将使用默认配置');
                 loadConfig();
             },
             resetConfig: () => {
@@ -3466,7 +2873,7 @@ if (httpStatus >= 500) {
                 CONFIG.methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'];
                 CONFIG.maxBodySize = 1024 * 1024;
                 saveConfig();
-                log('配置已重置为默认值');
+                info('配置已重置为默认值');
             },
             resetButtonPosition: () => {
                 localStorage.removeItem('httpMonitorButtonPosition');
@@ -3474,7 +2881,7 @@ if (httpStatus >= 500) {
                 if (button) {
                     button.style.setProperty('left', '20px', 'important');
                     button.style.setProperty('top', '20px', 'important');
-                    log('按钮位置已重置为默认位置');
+                    info('按钮位置已重置为默认位置');
                 }
             },
             setButtonPosition: (x, y) => {
@@ -3484,7 +2891,7 @@ if (httpStatus >= 500) {
                     button.style.setProperty('top', y + 'px', 'important');
                     const position = { x, y };
                     localStorage.setItem('httpMonitorButtonPosition', JSON.stringify(position));
-                    log(`按钮位置已设置为: (${x}, ${y})`);
+                    info(`按钮位置已设置为: (${x}, ${y})`);
                 }
             }
         };
