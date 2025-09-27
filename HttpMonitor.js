@@ -198,8 +198,12 @@ let CONFIG = {
     urlPatterns: [
         /[a-zA-z]+:\/\/[^\s]*/
     ],
+    // 展示与编辑使用的原始字面值（字符串数组），保存为 RegExp 存入 urlPatterns
+    urlPatternsRaw: [
+        '/[a-zA-z]+:\\/\\/[^\\s]*/'
+    ],
     // 要监控的HTTP方法
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD'],
     // 响应体大小限制（字节）
     maxBodySize: 1024 * 1024, // 1MB
     // 请求耗时阈值（毫秒）
@@ -214,6 +218,10 @@ let CONFIG = {
     plugins: [],
     // 自定义插件元信息（名称、启用、源码）
     pluginsMeta: [],
+    // 【前置】插件
+    prePluginsSource: [],
+    prePlugins: [],
+    prePluginsMeta: [],
     // 内置插件开关
     builtinEnabled: {
         httpCode: true,
@@ -244,7 +252,17 @@ let CONFIG = {
     // fetch 读取超时（毫秒）
     fetchTimeoutMs: 2000,
     // fetch 最大读取字节数（不超过 maxBodySize），和maxBytes取最小
-    fetchMaxBytes: 131072
+    fetchMaxBytes: 65536,
+    // 仅用元信息进行检查，跳过 body 深度分析
+    metaOnly: false,
+    // 复用 Worker 空闲自动回收秒数
+    workerIdleSeconds: 15,
+    // 复用 Worker 最大并发（串行=1）
+    workerMaxConcurrency: 1,
+    // Worker 返回的最大告警条数
+    maxWarningsPerRun: 50,
+    // 指标日志
+    metrics: false
 };
 
 function __log(handler, ...data){
@@ -276,6 +294,9 @@ function loadConfig() {
             // 保持 CONFIG 引用不变，避免外部引用失效
             Object.assign(CONFIG, parsed);
             info('合并后的配置:', CONFIG);
+            // 运行时函数数组不从存储中恢复，统一重建，避免 null 残留
+            CONFIG.plugins = [];
+            CONFIG.prePlugins = [];
 
             // 反序列化插件
             if (Array.isArray(CONFIG.pluginsSource)) {
@@ -286,9 +307,36 @@ function loadConfig() {
                     else warn('插件反序列化失败 index=' + idx);
                 });
             }
+            // 反序列化【前置】插件
+            if (Array.isArray(CONFIG.prePluginsSource)) {
+                CONFIG.prePlugins = [];
+                CONFIG.prePluginsSource.forEach((src, idx) => {
+                    const plugin = compilePrePluginFromSource(src);
+                    if (typeof plugin === 'function') CONFIG.prePlugins.push(plugin);
+                    else warn('【前置】插件反序列化失败 index=' + idx);
+                });
+            }
 
-            // 复原 urlPatterns 为 RegExp（若是字符串）
+            // 复原与同步 urlPatterns/urlPatternsRaw
+            // 1) 优先使用持久化的原始字面值渲染（若存在）
+            if (Array.isArray(parsed.urlPatternsRaw) && parsed.urlPatternsRaw.length > 0) {
+                CONFIG.urlPatternsRaw = parsed.urlPatternsRaw.slice();
+            } else if (Array.isArray(parsed.urlPatterns)) {
+                // 兼容旧数据：从 toString() 结果生成字面值
+                CONFIG.urlPatternsRaw = parsed.urlPatterns.map(p => String(p));
+            }
+            // 2) 将 Raw 同步为 RegExp
+            if (Array.isArray(CONFIG.urlPatternsRaw)) {
+                try {
+                    CONFIG.urlPatterns = CONFIG.urlPatternsRaw.map(raw => revivePattern(raw) instanceof RegExp ? revivePattern(raw) : new RegExp(String(raw)));
+                } catch {
             ensureUrlPatterns();
+                }
+            } else {
+                // 兜底
+                ensureUrlPatterns();
+                CONFIG.urlPatternsRaw = CONFIG.urlPatterns.map(p => p.toString());
+            }
         } catch (e) {
             warn('配置加载失败，使用默认配置:', e);
         }
@@ -320,10 +368,19 @@ function shouldMonitor(url) {
     info('URL Pattern:', CONFIG.urlPatterns);
 
     const result = CONFIG.urlPatterns.some(p => {
-        if (!(p instanceof RegExp)) { warn('urlPatterns 非正则项被忽略:', p); return false; }
-        try { p.lastIndex = 0; } catch { }
-        const matches = p.test(url);
-        info(`正则匹配: ${p} -> ${url} = ${matches}`);
+        let regex = p;
+        if (!(regex instanceof RegExp)) {
+            const revived = revivePattern(regex);
+            if (revived instanceof RegExp) {
+                regex = revived;
+            } else {
+                try { regex = new RegExp(String(regex)); }
+                catch { warn('urlPatterns 非法项被忽略:', regex); return false; }
+            }
+        }
+        try { regex.lastIndex = 0; } catch { }
+        const matches = regex.test(url);
+        info(`正则匹配: ${regex} -> ${url} = ${matches}`);
         return matches;
     });
 
@@ -382,11 +439,20 @@ function saveConfig() {
     try {
         const configToSave = {
             ...CONFIG,
+            // 仅用于兼容旧版本的视图/回退
             urlPatterns: CONFIG.urlPatterns.map(pattern => pattern.toString()),
+            // 新增：保存用户输入的原始字面值
+            urlPatternsRaw: Array.isArray(CONFIG.urlPatternsRaw) ? CONFIG.urlPatternsRaw.slice() : CONFIG.urlPatterns.map(p => p.toString()),
             // 直接保存来源源码与元信息，避免丢失用户书写格式
             pluginsSource: Array.isArray(CONFIG.pluginsSource) ? CONFIG.pluginsSource.slice() : [],
             pluginsMeta: Array.isArray(CONFIG.pluginsMeta) ? CONFIG.pluginsMeta.slice() : []
         };
+        // 保存【前置】插件源码与元信息
+        configToSave.prePluginsSource = Array.isArray(CONFIG.prePluginsSource) ? CONFIG.prePluginsSource.slice() : [];
+        configToSave.prePluginsMeta = Array.isArray(CONFIG.prePluginsMeta) ? CONFIG.prePluginsMeta.slice() : [];
+        // 不保存运行时函数数组，避免被序列化为 null 破坏结构
+        delete configToSave.plugins;
+        delete configToSave.prePlugins;
         localStorage.setItem('httpMonitorConfig', JSON.stringify(configToSave));
     } catch (e) {
         error('配置保存失败:', e);
@@ -442,8 +508,35 @@ function fallbackCopyTextToClipboard(text) {
 }
 
 
+function successToast(message) {
+    // 显示成功消息（绿色 Toast，避免被 .http-monitor-alert 的红色样式覆盖）
+    const okDiv = document.createElement('div');
+    okDiv.className = 'http-monitor-toast';
+    okDiv.textContent = message;
+    // 强制样式，避免被全局告警样式覆盖
+    okDiv.style.setProperty('position', 'fixed', 'important');
+    okDiv.style.setProperty('top', '20px', 'important');
+    okDiv.style.setProperty('right', '20px', 'important');
+    okDiv.style.setProperty('z-index', '1000002', 'important');
+    okDiv.style.setProperty('background', '#2e7d32', 'important');
+    okDiv.style.setProperty('color', '#fff', 'important');
+    okDiv.style.setProperty('padding', '8px 12px', 'important');
+    okDiv.style.setProperty('border-radius', '4px', 'important');
+    okDiv.style.setProperty('border-left', '4px solid #1b5e20', 'important');
+    okDiv.style.setProperty('box-shadow', '0 4px 20px rgba(0,0,0,0.3)', 'important');
+    okDiv.style.setProperty('font-family', 'Arial, sans-serif', 'important');
+    okDiv.style.setProperty('font-size', '14px', 'important');
+    okDiv.style.setProperty('white-space', 'nowrap', 'important');
+    okDiv.style.setProperty('max-width', 'unset', 'important');
+    document.body.appendChild(okDiv);
+    setTimeout(() => { try { okDiv.remove(); } catch { } }, 2000);
+}
+
+
 (function () {
     'use strict';
+    initMenu()
+    if (needHide()) return;
 
     // 存储原始fetch函数
     const originalFetch = window.fetch;
@@ -453,11 +546,97 @@ function fallbackCopyTextToClipboard(text) {
         ? navigator.sendBeacon.bind(navigator)
         : null;
 
-    // 轻量包装 sendBeacon：仅记录调用信息，不拦截/阻塞
+    // 运行时总开关（不卸载钩子，靠短路快速停用一切监控副作用）
+    let RUNTIME_DISABLED = false;
+
+    // 面向对象封装：统一启停与UI挂载/卸载
+    class HttpMonitor {
+        constructor() {
+            this.started = false;
+        }
+
+        start() {
+            if (this.started) return;
+            RUNTIME_DISABLED = false;
+            try { loadConfig(); } catch (e) { error('loadConfig failed', e); }
+            try { this.mountUI(); } catch (e) { error('[mountUI] failed', e); }
+            this.started = true;
+            
+            info('started');
+        }
+
+        stop() {
+            if (!this.started) return;
+            RUNTIME_DISABLED = true;
+            try { this.unmountUI(); } catch (e) { error('[unmountUI] failed', e); }
+            this.started = false;
+            info('stopped');
+        }
+
+        mountUI() {
+            // 若按钮已存在则不重复创建
+            const existed = document.querySelector('.http-monitor-config-btn');
+            if (!existed) {
+                try { createConfigButton(); } catch (e) { error('createConfigButton error', e); }
+            }
+        }
+
+        unmountUI() {
+            // 移除配置按钮
+            const btn = document.querySelector('.http-monitor-config-btn');
+            if (btn && btn.parentElement) {
+                try { btn.parentElement.removeChild(btn); } catch { }
+            }
+            // 关闭并移除弹窗容器
+            const modalContainer = document.querySelector('div[http-monitor-config]');
+            if (modalContainer && modalContainer.parentElement) {
+                try { modalContainer.parentElement.removeChild(modalContainer); } catch { }
+            }
+        }
+    }
+
+    // 暴露单例（便于控制台/菜单调用）
+    window.__httpMonitor = window.__httpMonitor || new HttpMonitor();
+
+    // 提供全局关闭配置窗口方法，供 modal 内联 onclick 调用
+    if (typeof window.httpMonitorCloseConfig !== 'function') {
+        window.httpMonitorCloseConfig = () => {
+            const modalContainer = document.querySelector('div[http-monitor-config]');
+            if (modalContainer) {
+                // 隐藏外部的modalContainer
+                try { modalContainer.style.setProperty('display', 'none', 'important'); } catch { }
+                // 隐藏内部的modal元素
+                const shadowRoot = modalContainer.shadowRoot;
+                const modal = shadowRoot && shadowRoot.querySelector('.http-monitor-config-modal');
+                if (modal) {
+                    try { modal.style.setProperty('display', 'none', 'important'); } catch { }
+                }
+            }
+            if (Array.isArray(CONFIG.prePluginsSource)) {
+                if (!Array.isArray(CONFIG.prePluginsMeta) || CONFIG.prePluginsMeta.length !== CONFIG.prePluginsSource.length) {
+                    const used2 = new Set();
+                    const meta2 = [];
+                    CONFIG.prePluginsSource.forEach((_, idx) => {
+                        let base = `【前置】plugin_${idx + 1}`;
+                        let name = base; let i = 1;
+                        while (used2.has(name)) { name = `${base}_${i++}`; }
+                        used2.add(name);
+                        meta2.push({ name, enabled: true, executionMode: 'inherit' });
+                    });
+                    CONFIG.prePluginsMeta = meta2;
+                }
+            }
+        };
+    }
+
+    // 轻量包装 sendBeacon：仅记录调用信息，不拦截/阻塞（尊重运行时停用）
     if (originalSendBeacon) {
         try {
             navigator.sendBeacon = function (url, data) {
                 try {
+                    if (RUNTIME_DISABLED || !CONFIG.enabled) {
+                        return originalSendBeacon(url, data);
+                    }
                     const abs = toAbsoluteUrl(url);
                     if (shouldMonitor(abs)) {
                         info('[sendBeacon]', abs, data);
@@ -490,7 +669,7 @@ function fallbackCopyTextToClipboard(text) {
 
     // 显示警告弹窗（入队）
     function showAlert(message, responseData) {
-        if (!CONFIG.enabled) return;
+        if (RUNTIME_DISABLED || !CONFIG.enabled) return;
 
         // 控制队列长度，避免堆积
         if (ALERT_QUEUE.length >= MAX_ALERT_QUEUE) {
@@ -522,13 +701,20 @@ function fallbackCopyTextToClipboard(text) {
                 error("alert and parser url error", e)
             }
 
-            // 准备复制内容与显示内容（请求信息过长时仅显示部分，但复制完整）
+            // 准备复制内容与显示内容（请求信息与错误信息过长时仅显示部分，但复制完整）
             const errorContent = message ? `${message}` : '';
             const fullRequestInfo = responseData && responseData.requestInfo ? String(responseData.requestInfo) : '';
             const REQ_TRUNC_LIMIT = Math.max(50, Number(CONFIG.alertRequestInfoDisplayLimit || 300));
             const displayRequestInfo = fullRequestInfo && fullRequestInfo.length > REQ_TRUNC_LIMIT
                 ? `${fullRequestInfo.slice(0, REQ_TRUNC_LIMIT)}…(已省略${fullRequestInfo.length - REQ_TRUNC_LIMIT}字)`
                 : fullRequestInfo;
+            const WARN_TRUNC_LIMIT = REQ_TRUNC_LIMIT;
+            const errorContentDisplay = (errorContent || '')
+                .split('\n')
+                .map(line => line.length > WARN_TRUNC_LIMIT
+                    ? `${line.slice(0, WARN_TRUNC_LIMIT)}…(已省略${line.length - WARN_TRUNC_LIMIT}字)`
+                    : line)
+                .join('\n');
 
             const httpMetaContentFull = responseData ?
                 `时间: ${tsStr} (${ts})\n` +
@@ -540,7 +726,8 @@ function fallbackCopyTextToClipboard(text) {
                 `方法: ${responseData.method}\n` +
                 `大小: ${formatBytes(responseData.size)}\n` +
                 `耗时: ${formatMilliseconds(responseData.durationMs)}\n` +
-                (fullRequestInfo ? `参数: ${fullRequestInfo}\n` : '') : `HTTP元信息为空`;
+                (fullRequestInfo ? `参数: ${fullRequestInfo}\n` : '') +
+                (responseData.headers ? `RespHeaders: ${(() => { try { return JSON.stringify(responseData.headers); } catch { return '' } })()}\n` : '') : `HTTP元信息为空`;
 
             const httpMetaContentDisplay = responseData ?
                 `时间: ${tsStr} (${ts})\n` +
@@ -633,7 +820,7 @@ function fallbackCopyTextToClipboard(text) {
                 <div class="http-monitor-title">HTTP响应监控告警</div>
                 <div class="http-monitor-section">
                     <div class="http-monitor-section-title">错误信息</div>
-                    <div class="http-monitor-section-body">${errorContent}</div>
+                    <div class="http-monitor-section-body">${errorContentDisplay}</div>
                 </div>
                 <div class="http-monitor-section">
                     <div class="http-monitor-section-title">HTTP元信息</div>
@@ -672,6 +859,7 @@ function fallbackCopyTextToClipboard(text) {
                                 entries: [responseData ? {
                                     startedDateTime: new Date(ts).toISOString(),
                                     time: typeof responseData.durationMs === 'number' ? responseData.durationMs : 0,
+                                    comment: errorContent || '',
                                     request: {
                                         method: responseData.method || '',
                                         url: absoluteUrl,
@@ -802,13 +990,13 @@ function fallbackCopyTextToClipboard(text) {
                 return [`响应体过大: ${formatBytes(sizeBytes)}`];
             }
             return [];
-        }, { __name: 'sizeLimit', __title: '响应体大小限制' }),
+        }, { __name: 'sizeLimit', __title: '响应体大小检查' }),
         Object.assign(function durationLimitPlugin({ durationMs }) {
             if (typeof durationMs === 'number' && durationMs > CONFIG.maxDurationMs) {
                 return [`请求耗时过长: ${formatMilliseconds(durationMs)}`];
             }
             return [];
-        }, { __name: 'durationLimit', __title: '请求耗时限制' }),
+        }, { __name: 'durationLimit', __title: '请求耗时检查' }),
     ];
 
     // 将插件源码编译为可执行函数
@@ -821,7 +1009,7 @@ function fallbackCopyTextToClipboard(text) {
                 if (typeof fn === 'function') return fn;
             }
             // 新格式：仅写函数主体，由框架包裹
-            const wrapped = `return function(ctx){\n  const { httpStatus, durationMs, sizeBytes, body, rawBody, contentType } = ctx;\n  const warnings = [];\n  try {\n${trimmed}\n  } catch (e) {}\n  return warnings;\n}`;
+            const wrapped = `return function(ctx){\n  const { httpStatus, durationMs, sizeBytes, body, contentType } = ctx;\n  const warnings = [];\n  try {\n${trimmed}\n  } catch (e) {}\n  return warnings;\n}`;
             return new Function(wrapped)();
         } catch (e) {
             warn('插件编译失败:', e);
@@ -829,17 +1017,120 @@ function fallbackCopyTextToClipboard(text) {
         }
     }
 
+    // 【前置】插件编译：请求发出前执行，提供请求上下文
+    function compilePrePluginFromSource(src) {
+        try {
+            const trimmed = String(src || '').trim();
+            // 支持完整函数写法：function(ctx){...} 或 (ctx)=>{...}
+            if (/^(function|\()/i.test(trimmed)) {
+                const fn = new Function('return (' + trimmed + ')')();
+                if (typeof fn === 'function') return fn;
+            }
+            // 仅函数体写法：允许通过设置 block/message/headers/query/form/json/contentType 来生效
+            const wrapped = `return function(ctx){\n  let { query, form, json, contentType, headers } = ctx || {};\n  let block = false;\n  let message = '';\n  try {\n${trimmed}\n  } catch (e) {}\n  const out = {};\n  if (block === true) out.block = true;\n  if (message && typeof message === 'string') out.message = message;\n  if (headers && typeof headers === 'object' && Object.keys(headers).length) out.headers = headers;\n  if (typeof query === 'string') out.query = query;\n  if (typeof form === 'string') out.form = form;\n  if (typeof json === 'string') out.json = json;\n  if (typeof contentType === 'string') out.contentType = contentType;\n  return out;\n}`;
+            return new Function(wrapped)();
+        } catch (e) {
+            warn('【前置】插件编译失败:', e);
+            return null;
+        }
+    }
+
+    // 运行【前置】插件，支持阻断与修改请求（headers/query/body/contentType）
+    function runPrePlugins(preCtx) {
+        let messages = []
+        const result = { blocked: false, message: '', headers: {}, query: null, form: null, json: null, contentType: null };
+        if (!Array.isArray(CONFIG.prePlugins) || !Array.isArray(CONFIG.prePluginsMeta)) return { result, ctx: preCtx };
+        let ctx = { ...preCtx, headers: { ...(preCtx.headers || {}) } };
+        CONFIG.prePlugins.forEach((fn, idx) => {
+            const meta = CONFIG.prePluginsMeta[idx] || {}; if (meta.enabled === false || typeof fn !== 'function') return;
+            try {
+                const out = fn(ctx);
+                if (Array.isArray(out)) return; // 兼容仅返回 warnings 的旧风格
+                if (out && typeof out === 'object') {
+                    if (out.block === true) { result.blocked = true; if (out.message) messages.push(String(out.message)); }
+                    if (out.headers && typeof out.headers === 'object') { Object.assign(result.headers, out.headers); Object.assign(ctx.headers, out.headers); }
+                    if (typeof out.query === 'string') { result.query = out.query; ctx.query = out.query; }
+                    if (typeof out.form === 'string') { result.form = out.form; ctx.form = out.form; ctx.json = null; }
+                    if (typeof out.json === 'string') { result.json = out.json; ctx.json = out.json; ctx.form = null; }
+                    if (typeof out.contentType === 'string') { result.contentType = out.contentType; ctx.contentType = out.contentType; }
+                }
+            } catch (e) { warn('【前置】执行错误', e); }
+        });
+        result.message = messages.join("\n")
+        return { result, ctx };
+    }
+
     // Worker 沙箱：单例 worker
     let pluginWorker = null;
     let pluginWorkerBusy = false;
+    let pluginWorkerIdleTimer = null;
+    let pluginWorkerQueue = [];
+    let pluginWorkerLoaded = false;
+    function buildWorkerCode(){
+        return `(()=>{\nlet loadedFns=null;\nfunction compileOne(src){const s=String(src||'').trim();if(/^(function|\\()/i.test(s)){return (new Function('return ('+s+')'))();}const w='return function(ctx){\\n  const { httpStatus, durationMs, sizeBytes, body, contentType } = ctx;\\n  const warnings = [];\\n  try {\\n'+s+'\\n  } catch (e) {}\\n  return warnings;\\n}';return (new Function(w))();}\nself.onmessage=async(e)=>{const d=e.data||{};const {id,type}=d;try{if(type==='load'){const sources=Array.isArray(d.sources)?d.sources:[];loadedFns=sources.map(s=>{try{return compileOne(s)}catch(e){return null}}).filter(fn=>typeof fn==='function');self.postMessage({id,ok:true,loaded:(loadedFns?loadedFns.length:0)});return;}if(type==='run'){let fns=loadedFns; if(!fns){const sources=Array.isArray(d.sources)?d.sources:[];fns=sources.map(s=>{try{return compileOne(s)}catch(e){return null}}).filter(fn=>typeof fn==='function');}const ctx=d.context||{};const out=[];for(let i=0;i<(fns?fns.length:0);i++){try{const res=fns[i](ctx)||[];for(const w of res) out.push(w);}catch(e){}}const max= typeof d.maxWarnings==='number'?d.maxWarnings:50;const trimmed=out.slice(0,Math.max(0,max));self.postMessage({id,ok:true,warnings:trimmed});return;}self.postMessage({id,ok:false,error:'unknown_type'});}catch(err){self.postMessage({id,ok:false,error:String(err)})}};\n})();`;
+    }
     function ensurePluginWorker() {
         if (pluginWorker) return pluginWorker;
-        const workerCode = `self.onmessage = async (e)=>{\n  const { id, sources, context } = e.data || {};\n  try {\n    // 编译所有插件为函数数组\n    const fns = (Array.isArray(sources)?sources:[]).map((src)=>{\n      const s = String(src||'').trim();\n      try{\n        if (/^(function|\\()/i.test(s)) { return (new Function('return ('+s+')'))(); }\n        const wrapped = 'return function(ctx){\\n  const { httpStatus, durationMs, sizeBytes, body, rawBody, contentType } = ctx;\\n  const warnings = [];\\n  try {\\n'+s+'\\n  } catch (e) {}\\n  return warnings;\\n}';\n        return (new Function(wrapped))();\n      }catch(err){ return null; }\n    }).filter(fn=>typeof fn==='function');\n    // 执行\n    const warnings = [];\n    for (let i=0;i<fns.length;i++){\n      try {\n        const res = fns[i](context) || [];\n        for (const w of res) warnings.push(w);\n      } catch(err){}\n    }\n    self.postMessage({ id, ok:true, warnings });\n  } catch(err){\n    self.postMessage({ id, ok:false, error: String(err) });\n  }\n};`;
-        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        const blob = new Blob([buildWorkerCode()], { type: 'application/javascript' });
         const url = URL.createObjectURL(blob);
         pluginWorker = new Worker(url);
         URL.revokeObjectURL(url);
+        pluginWorkerLoaded = false;
         return pluginWorker;
+    }
+    function scheduleWorkerIdle() {
+        try { if (pluginWorkerIdleTimer) clearTimeout(pluginWorkerIdleTimer); } catch {}
+        const idleMs = Math.max(5, Number(CONFIG.workerIdleSeconds || 15)) * 1000;
+        pluginWorkerIdleTimer = setTimeout(() => {
+            try { if (pluginWorker) { pluginWorker.terminate(); pluginWorker = null; pluginWorkerLoaded = false; } } catch {}
+        }, idleMs);
+    }
+    async function runInReuseWorker(sources, context, rawBytes) {
+        const maxConc = Math.max(1, Number(CONFIG.workerMaxConcurrency || 1));
+        return new Promise((resolve) => {
+            const task = async () => {
+                pluginWorkerBusy = true;
+                const w = ensurePluginWorker();
+                const reqId = 'w_' + Math.random().toString(36).slice(2);
+                const timeoutMs = Math.max(1000, Number(CONFIG.pluginWorkerTimeoutMs || 60000));
+                const onMsg = (ev) => {
+                    const data = ev.data || {};
+                    if (data.id === reqId) {
+                        try { w.removeEventListener('message', onMsg); } catch {}
+                        clearTimeout(timer);
+                        pluginWorkerBusy = false;
+                        scheduleWorkerIdle();
+                        resolve(data);
+                        // 处理队列
+                        const next = pluginWorkerQueue.shift();
+                        if (next) next();
+                    }
+                };
+                w.addEventListener('message', onMsg);
+                const post = () => {
+                    const payload = { id: reqId, type: 'run', sources, context, maxWarnings: Number(CONFIG.maxWarningsPerRun || 50) };
+                    if (rawBytes && rawBytes.byteLength > 0) {
+                        try { w.postMessage({ ...payload, rawBytes }, [rawBytes]); } catch { w.postMessage({ ...payload, rawBytes }); }
+                    } else {
+                        w.postMessage(payload);
+                    }
+                };
+                if (!pluginWorkerLoaded) {
+                    const loadId = 'l_' + Math.random().toString(36).slice(2);
+                    const onLoad = (e2) => { const d = e2.data || {}; if (d.id === loadId) { try { w.removeEventListener('message', onLoad); } catch {} pluginWorkerLoaded = true; post(); } };
+                    w.addEventListener('message', onLoad);
+                    w.postMessage({ id: loadId, type: 'load', sources });
+                } else {
+                    post();
+                }
+                const timer = setTimeout(() => {
+                    try { w.terminate(); } catch(e) {error("worker中断错误", e)} pluginWorker = null; pluginWorkerLoaded = false; pluginWorkerBusy = false; resolve({ ok:false, error:'timeout' });
+                }, timeoutMs);
+            };
+            // 简单串行队列
+            if (pluginWorkerBusy || (maxConc <= 1 && pluginWorkerQueue.length > 0)) pluginWorkerQueue.push(task);
+            else task();
+        });
     }
 
     // HTML转义
@@ -903,8 +1194,10 @@ function fallbackCopyTextToClipboard(text) {
         const nameInput = itemNode.querySelector('.plugin-name');
         const codeArea = itemNode.querySelector('.plugin-code');
         const overlay = itemNode.querySelector('.plugin-code-overlay');
+        const collapsible = itemNode.querySelector('.plugin-code-collapsible');
         const fullscreenBtn = itemNode.querySelector('.plugin-fullscreen-btn');
         const formatBtn = itemNode.querySelector('.plugin-format-btn');
+        const copyBtn = itemNode.querySelector('.plugin-content-copy');
 
         // 初始化高亮
         if (overlay && codeArea) {
@@ -923,6 +1216,10 @@ function fallbackCopyTextToClipboard(text) {
             codeArea.addEventListener('scroll', () => {
                 overlay.scrollTop = codeArea.scrollTop;
             });
+            // 默认折叠
+            if (collapsible && typeof collapsible.open === 'boolean') {
+                collapsible.open = false;
+            }
             // 双击覆盖层进入/退出全屏（reparent 到 fullscreen-layer）
             overlay.addEventListener('dblclick', (e) => {
                 e.preventDefault(); e.stopPropagation();
@@ -976,6 +1273,16 @@ function fallbackCopyTextToClipboard(text) {
             });
         }
 
+        // 复制代码
+        if (copyBtn) {
+            copyBtn.addEventListener('click', (e) => {
+                e.preventDefault(); e.stopPropagation();
+                codeArea.value = codeArea.value.trim();
+                navigator.clipboard.writeText(codeArea.value);
+                successToast('代码已复制');
+            });
+        }
+
         // 名称实时校验（冲突标记在外层）
         if (nameInput) {
             nameInput.addEventListener('input', () => {
@@ -1016,14 +1323,9 @@ function fallbackCopyTextToClipboard(text) {
     function rebuildPluginsUI(shadowRoot) {
         const container = shadowRoot.querySelector('#config-plugins');
         if (!container) return;
-        container.innerHTML = (CONFIG.pluginsMeta || []).map((meta, index) => `
-            <div class="http-monitor-config-url-pattern plugin-item" data-index="${index}">
-                <input type="text" class="http-monitor-config-input plugin-name" value="${(meta.name || '').replace(/"/g, '&quot;')}" placeholder="插件名称（唯一）" style="margin-bottom:6px;">
-                <label style="display:block;margin-bottom:6px;"><input type="checkbox" class="plugin-enabled" ${meta.enabled !== false ? 'checked' : ''}> 启用</label>
-                ${renderPluginCodeEditorHTML((CONFIG.pluginsSource && CONFIG.pluginsSource[index]) || '')}
-                ${renderPluginToolbarHTML()}
-            </div>
-        `).join('');
+        container.innerHTML = (CONFIG.pluginsMeta || []).map((meta, index) =>
+            renderPluginItemHTML(meta, index, (CONFIG.pluginsSource && CONFIG.pluginsSource[index]) || '', false)
+        ).join('');
         // 绑定事件
         container.querySelectorAll('.plugin-item').forEach(item => {
             const removeBtn = item.querySelector('.remove-plugin-btn');
@@ -1036,6 +1338,51 @@ function fallbackCopyTextToClipboard(text) {
             }
             attachPluginEditorBehavior(shadowRoot, item);
         });
+        // 重建后，确保工具控件存在且绑定
+        ensurePluginControls(shadowRoot);
+
+        // 同步重建【前置】插件列表
+        const preContainer = shadowRoot.querySelector('#pre-plugins');
+        if (preContainer) {
+            preContainer.innerHTML = (CONFIG.prePluginsMeta || []).map((meta, index) =>
+                renderPluginItemHTML(meta, index, (CONFIG.prePluginsSource && CONFIG.prePluginsSource[index]) || '', true)
+            ).join('');
+            preContainer.querySelectorAll('.plugin-item').forEach(item => {
+                const removeBtn = item.querySelector('.remove-plugin-btn');
+                if (removeBtn) removeBtn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); removePrePluginItem(shadowRoot, item); });
+                attachPluginEditorBehavior(shadowRoot, item);
+            });
+        }
+    }
+
+    // 删除一个【前置】插件条目，并更新配置与UI
+    function removePrePluginItem(shadowRoot, itemNode) {
+        try {
+            const preContainer = shadowRoot.querySelector('#pre-plugins');
+            if (!preContainer || !itemNode) { try { itemNode && itemNode.remove(); } catch {} return; }
+            const items = Array.from(preContainer.querySelectorAll('.plugin-item'));
+            const idx = items.indexOf(itemNode);
+            if (idx >= 0) {
+                try { itemNode.remove(); } catch {}
+                try {
+                    if (Array.isArray(CONFIG.prePluginsSource)) CONFIG.prePluginsSource.splice(idx, 1);
+                    if (Array.isArray(CONFIG.prePluginsMeta)) CONFIG.prePluginsMeta.splice(idx, 1);
+                    if (Array.isArray(CONFIG.prePlugins)) CONFIG.prePlugins.splice(idx, 1);
+                } catch {}
+                try { saveConfig(); } catch {}
+                // 重建 UI 以刷新索引
+                const preList = shadowRoot.querySelector('#pre-plugins');
+                if (preList) {
+                    preList.innerHTML = (CONFIG.prePluginsMeta || []).map((m,i)=>
+                        renderPluginItemHTML(m, i, (CONFIG.prePluginsSource && CONFIG.prePluginsSource[i]) || '', true)
+                    ).join('');
+                    preList.querySelectorAll('.plugin-item').forEach(item=>{ const btn=item.querySelector('.remove-plugin-btn'); if (btn) btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); removePrePluginItem(shadowRoot, item); }); attachPluginEditorBehavior(shadowRoot, item); });
+                }
+            } else {
+                // 回退：仅移除 DOM
+                try { itemNode.remove(); } catch {}
+            }
+        } catch (e) { warn('removePrePluginItem error', e); try { itemNode && itemNode.remove(); } catch {} }
     }
 
     // 简易格式化（占位方案）
@@ -1104,22 +1451,46 @@ function fallbackCopyTextToClipboard(text) {
         }
     }
 
-    // 统一占位文本（插件代码）
-    const PLUGIN_CODE_PLACEHOLDER = `// 仅填写主体，无需 function/return
-// warnings是数组，用来存放告警文本
-// 可用: httpStatus, durationMs, sizeBytes, body, rawBody, contentType
-if (httpStatus >= 500) {
-  warnings.push('服务异常');
-}`;
-
     // 渲染插件代码编辑器（覆盖层 + textarea）
     function renderPluginCodeEditorHTML(initialSource) {
+            // 后置插件占位文本（处理响应）
+        const PLUGIN_CODE_PLACEHOLDER = `// 仅填写主体，无需 function/return
+// 可用: httpStatus, durationMs, sizeBytes, body, rawBody, contentType
+// 将文本告警 push 到 warnings 数组
+// 示例: if (httpStatus >= 500) { warnings.push('服务异常'); }
+// 也支持完整函数: function(ctx){ /*...*/ return [] } 或 (ctx)=>[]`;
         const source = (initialSource || '');
         return `
+                <details class="plugin-code-collapsible" open>
+                    <summary class="plugin-code-summary">插件代码（点击折叠/展开）</summary>
                 <div class="plugin-code-wrapper">
                     <pre class="plugin-code-overlay"></pre>
                     <textarea class="http-monitor-config-textarea plugin-code" placeholder="${PLUGIN_CODE_PLACEHOLDER.replace(/"/g, '&quot;')}">${source}</textarea>
-                </div>`;
+                    </div>
+                </details>`;
+    }
+
+    // 渲染【前置】插件代码编辑器（不同占位提示）
+    function renderPrePluginCodeEditorHTML(initialSource) {
+        const PRE_PLUGIN_CODE_PLACEHOLDER = `// 仅填写主体，无需 function/return
+// 可用: query, form, json, contentType, headers
+// 可设置: block(布尔), message(字符串), headers(对象), query/form/json/contentType(字符串)
+// 示例1：追加Header
+// headers = { ...(headers||{}), 'X-Debug': '1' };
+// 示例2：阻断请求
+// block = true; message = 'blocked by pre-plugin';
+// 示例3：改写JSON请求体
+// try { const obj = JSON.parse(json||'{}'); obj.injected = true; json = JSON.stringify(obj); contentType = 'application/json'; } catch {}
+// 也支持完整函数: function(ctx){ /*...*/ return { headers, json, contentType } }`;
+        const source = (initialSource || '');
+        return `
+                <details class="plugin-code-collapsible" open>
+                    <summary class="plugin-code-summary">插件代码（点击折叠/展开）</summary>
+                <div class="plugin-code-wrapper">
+                    <pre class="plugin-code-overlay"></pre>
+                    <textarea class="http-monitor-config-textarea plugin-code" placeholder="${PRE_PLUGIN_CODE_PLACEHOLDER.replace(/"/g, '&quot;')}">${source}</textarea>
+                    </div>
+                </details>`;
     }
 
     // 渲染插件工具栏
@@ -1129,7 +1500,38 @@ if (httpStatus >= 500) {
                     <button class="remove-plugin-btn">删除</button>
                     <button class="plugin-format-btn">格式化</button>
                     <button class="plugin-fullscreen-btn">全屏/还原</button>
+                    <button class="plugin-content-copy">复制</button>
                 </div>`;
+    }
+
+    // 通用：渲染单个插件项（前置/后置一致的两行头部 + 工具栏 + 代码编辑器）
+    function renderPluginItemHTML(meta, index, source, isPre) {
+        const m = meta || {};
+        const name = (m.name || '').replace(/\"/g, '&quot;');
+        const exec = m.executionMode;
+        const timeoutVal = (typeof m.timeoutMs === 'number') ? m.timeoutMs : '';
+        const editorHTML = isPre ? renderPrePluginCodeEditorHTML(source || '') : renderPluginCodeEditorHTML(source || '');
+        return `
+            <div class=\"http-monitor-config-url-pattern plugin-item\" data-index=\"${index}\">\n\
+                <div class=\"plugin-header\"> \n\
+                    <input type=\"text\" class=\"http-monitor-config-input plugin-name\" value=\"${name}\" placeholder=\"插件名称（唯一）\"> \n\
+                    <label><input type=\"checkbox\" class=\"plugin-enabled\" ${m.enabled !== false ? 'checked' : ''}><b>启用</b></label>\n\
+                </div>\n\
+                <div class=\"plugin-header\">\n\
+                    <label style=\"width:100%; height:100%;\">\n\
+                        <label><b>执行模式:</b></label>\n\
+                        <select class=\"plugin-exec-mode\"> \n\
+                        <option value=\"inherit\" ${(exec === 'inherit' || !exec) ? 'selected' : ''}>继承</option>\n\
+                        <option value=\"reuse\" ${exec === 'reuse' ? 'selected' : ''}>重用Worker</option>\n\
+                        <option value=\"spawn\" ${exec === 'spawn' ? 'selected' : ''}>重建Worker</option>\n\
+                        </select>\n\
+                        <label><b>超时(ms):</b></label>\n\
+                        <input type=\"number\" class=\"plugin-timeout\" value=\"${timeoutVal}\" placeholder=\"继承全局\">\n\
+                    </label>\n\
+                </div>\n\
+                ${renderPluginToolbarHTML()}\n\
+                ${editorHTML}\n\
+            </div>`;
     }
 
     // 渲染 URL Pattern 行
@@ -1138,7 +1540,9 @@ if (httpStatus >= 500) {
                             <div class="http-monitor-config-url-pattern">
                                 <input type="text" class="http-monitor-config-input" value="${(patternValue || '').toString().replace(/"/g, '&quot;')}"
                                        placeholder="例如: /api/.* 或 .*">
-                                <button class="remove-pattern-btn">删除</button>
+                                <button class="remove-pattern-btn" type="button" aria-label="删除此规则" title="删除">
+                                    &times;
+                                </button>
                             </div>`;
     }
 
@@ -1151,7 +1555,6 @@ if (httpStatus >= 500) {
             durationMs: meta && typeof meta.durationMs === 'number' ? meta.durationMs : undefined,
             sizeBytes: parsedData.size,
             body: parsedData.parsedBody,
-            rawBody: parsedData.rawBody,
             contentType: parsedData.contentType
         };
 
@@ -1163,7 +1566,7 @@ if (httpStatus >= 500) {
                 const t0 = performance.now();
                 const result = plugin(context) || [];
                 const dt = performance.now() - t0;
-                if (dt > 50) warn(`[plugin-slow] builtin ${key} took ${Math.round(dt)}ms`);
+                if (CONFIG.metrics && dt > 1) info(`[metrics] builtin ${key} took ${Math.round(dt)}ms`);
                 for (const w of result) warnings.push(w);
             } catch (e) {
                 warn('插件执行错误(built-in):', e);
@@ -1172,6 +1575,9 @@ if (httpStatus >= 500) {
 
         // 再跑用户自定义插件（按开关）
         if (Array.isArray(CONFIG.plugins) && Array.isArray(CONFIG.pluginsMeta)) {
+            // 主线程快速短路：若前面的内置规则已无输出，则判定为低风险，跳过深度分析
+            const quickNoRisk = warnings.length === 0;
+
             // 分组：reuse/spawn 以及 inherit->跟随全局（pluginWorkerEnabled?reuse:main）
             const reuseSources = [];
             const spawnSources = [];
@@ -1185,30 +1591,20 @@ if (httpStatus >= 500) {
                 else mainThreadIdx.push(i);
             });
 
-            // 1) reuse 组：单 Worker 执行
-            if (reuseSources.length > 0) {
+            // 1) reuse 组：单 Worker 执行（仅在非低风险且未启用 metaOnly 时进入）
+            if (reuseSources.length > 0 && !quickNoRisk && !CONFIG.metaOnly) {
                 try {
-                    const w = ensurePluginWorker();
-                    const reqId = 'w_' + Math.random().toString(36).slice(2);
-                    const timeoutMs = Math.max(1000, Number(CONFIG.pluginWorkerTimeoutMs || 60000));
-                    const p = new Promise((resolve) => {
-                        const onMsg = (ev) => {
-                            const data = ev.data || {};
-                            if (data.id === reqId) {
-                                w.removeEventListener('message', onMsg);
-                                resolve(data);
-                            }
-                        };
-                        w.addEventListener('message', onMsg);
-                        w.postMessage({ id: reqId, sources: reuseSources.map(r => r.src), context });
-                    });
-                    let out = null; let timed = false;
-                    const timer = setTimeout(() => { try { w.terminate(); } catch(e) {error("worker中断错误", e)} out = { ok: false, error: 'timeout' }; timed = true; pluginWorker = null; }, timeoutMs);
-                    out = await p;
-                    clearTimeout(timer);
+                    const lightContext = { httpStatus: meta && typeof meta.status === 'number' ? meta.status : undefined,
+                        durationMs: meta && typeof meta.durationMs === 'number' ? meta.durationMs : undefined,
+                        sizeBytes: parsedData && typeof parsedData.size === 'number' ? parsedData.size : undefined,
+                        contentType: parsedData ? parsedData.contentType : undefined };
+                    // 仅在需要且类型允许时发送原始字节（transferable）
+                    const tStart = performance.now();
+                    const out = await runInReuseWorker(reuseSources.map(r => r.src), lightContext, null);
+                    if (CONFIG.metrics) info(`[metrics] worker-reuse run took ${Math.round(performance.now()-tStart)}ms`);
                     if (out && out.ok && Array.isArray(out.warnings)) {
                         for (const ww of out.warnings) warnings.push(ww);
-                    } else if (timed) {
+                    } else if (out && out.error === 'timeout') {
                         warn('[plugin-worker] execution timeout');
                     }
                 } catch (e) {
@@ -1217,17 +1613,18 @@ if (httpStatus >= 500) {
                 }
             }
 
-            // 2) spawn 组：逐个创建临时 Worker
+            // 2) spawn 组：逐个创建临时 Worker（仅在非低风险且未启用 metaOnly 时进入）
             for (const item of spawnSources) {
+                if (quickNoRisk || CONFIG.metaOnly) break;
                 try {
-                    const blobUrl = URL.createObjectURL(new Blob([`self.onmessage=e=>{const{ id,src,ctx }=e.data||{};try{let fn=null;const s=String(src||'').trim();if(/^(function|\\()/i.test(s)){fn=(new Function('return ('+s+')'))();}else{const w='return function(ctx){\\n  const { httpStatus, durationMs, sizeBytes, body, rawBody, contentType } = ctx;\\n  const warnings = [];\\n  try {\\n'+s+'\\n  } catch (e) {}\\n  return warnings;\\n}';fn=(new Function(w))();}const res=fn?fn(ctx)||[]:[];self.postMessage({id,ok:true,warnings:res});}catch(err){self.postMessage({id,ok:false,error:String(err)})}};`], { type: 'application/javascript' }));
+                    const blobUrl = URL.createObjectURL(new Blob([`self.onmessage=e=>{const{ id,src,ctx }=e.data||{};try{let fn=null;const s=String(src||'').trim();if(/^(function|\\()/i.test(s)){fn=(new Function('return ('+s+')'))();}else{const w='return function(ctx){\\n  const { httpStatus, durationMs, sizeBytes, body, contentType } = ctx;\\n  const warnings = [];\\n  try {\\n'+src+'\\n  } catch (e) {}\\n  return warnings;\\n}';fn=(new Function(w))();}const res=fn?fn(ctx)||[]:[];self.postMessage({id,ok:true,warnings:res});}catch(err){self.postMessage({id,ok:false,error:String(err)})}};`], { type: 'application/javascript' }));
                     const worker = new Worker(blobUrl);
                     const execId = 's_' + Math.random().toString(36).slice(2);
                     const timeoutMs = Math.max(1000, Number(item.meta.timeoutMs || CONFIG.pluginWorkerTimeoutMs || 60000));
                     const pr = new Promise((resolve) => {
                         const onMsg = (ev) => { const d = ev.data || {}; if (d.id === execId) { worker.removeEventListener('message', onMsg); resolve(d); } };
                         worker.addEventListener('message', onMsg);
-                        worker.postMessage({ id: execId, src: item.src, ctx: context });
+                        worker.postMessage({ id: execId, src: item.src, ctx: { httpStatus: meta && typeof meta.status==='number'?meta.status:undefined, durationMs: meta && typeof meta.durationMs==='number'?meta.durationMs:undefined, sizeBytes: parsedData && typeof parsedData.size==='number'?parsedData.size:undefined, contentType: parsedData?parsedData.contentType:undefined } });
                     });
                     let res = null; let timed2 = false; const tmr = setTimeout(() => { try { worker.terminate(); } catch(e) {error("worker中断错误", e)} try { URL.revokeObjectURL(blobUrl); } catch(e) {error("revokeObjectURL error in worker", e)} res = { ok: false, error: 'timeout' }; timed2 = true; }, timeoutMs);
                     res = await pr; clearTimeout(tmr); try { worker.terminate(); } catch(e) {error("worker中断错误", e)} try { URL.revokeObjectURL(blobUrl); } catch(e) {error("revokeObjectURL error in worker", e)}
@@ -1246,7 +1643,7 @@ if (httpStatus >= 500) {
                     const t0 = performance.now();
                     const result = plugin(context) || [];
                     const dt = performance.now() - t0;
-                    if (dt > 50) warn(`[plugin-slow] custom ${meta.name || idx} took ${Math.round(dt)}ms`);
+                if (CONFIG.metrics && dt > 1) info(`[metrics] custom ${meta.name || idx} took ${Math.round(dt)}ms`);
                     for (const w of result) warnings.push(w);
                 } catch (e) { warn('插件执行错误(custom):', e); }
             });
@@ -1257,6 +1654,9 @@ if (httpStatus >= 500) {
 
     // 拦截fetch请求
     window.fetch = async function (...args) {
+        if (RUNTIME_DISABLED || !CONFIG.enabled) {
+            return originalFetch.apply(this, args);
+        }
         // 如果配置了排除fetch请求，直接返回原始fetch
         if (CONFIG.excludeFetch) {
             return originalFetch.apply(this, args);
@@ -1265,11 +1665,20 @@ if (httpStatus >= 500) {
         const [resource, options = {}] = args;
         const rawUrl = typeof resource === 'string' ? resource : resource.url;
         const url = toAbsoluteUrl(rawUrl);
-        const method = options.method || 'GET';
-
-        if (!shouldMonitor(url) || !CONFIG.methods.includes(method)) {
+        const method = (options && options.method) || (resource && typeof resource === 'object' && resource.method) || 'GET';
+        const methodUpper = String(method).toUpperCase();
+        // 跳过 CORS 预检（OPTIONS）请求，避免干预造成失败
+        if (methodUpper === 'OPTIONS') {
             return originalFetch.apply(this, args);
         }
+        // 对未命中监控规则的请求，不运行前置插件，直接透传，避免无意添加自定义头引发 CORS 预检
+        try {
+            if (!shouldMonitor(url) || !CONFIG.methods.includes(method)) {
+                return originalFetch.apply(this, args);
+            }
+        } catch {}
+
+        // 监控判断放到前置插件之后（前置插件总是先运行）
 
         // 跳过 keepalive（卸载阶段 fire-and-forget，不应阻塞）
         if (options && options.keepalive === true) {
@@ -1277,6 +1686,103 @@ if (httpStatus >= 500) {
         }
 
         try {
+            
+            // 【前置】插件执行（请求前）
+            try {
+                const hdrs = {};
+                const inHeaders = options && options.headers ? options.headers : (resource && resource.headers);
+                if (inHeaders) {
+                    if (typeof inHeaders.forEach === 'function') { inHeaders.forEach((v,k)=>{ hdrs[k]=v; }); }
+                    else if (typeof inHeaders === 'object') { for (const k in inHeaders) hdrs[k] = inHeaders[k]; }
+                }
+                let query=''; let form=''; let json=''; let ctype=hdrs['content-type']||hdrs['Content-Type']||'';
+                try { const u=new URL(url); query = u.search ? u.search.slice(1) : ''; } catch {}
+                if (options && options.body) {
+                    if (typeof options.body === 'string') {
+                        if (/^[{\[]/.test(options.body)) json = options.body; else form = options.body;
+                    } else if (options.body instanceof URLSearchParams) { form = options.body.toString(); }
+                    else if (typeof FormData !== 'undefined' && options.body instanceof FormData) { const pairs=[]; for (const [k,v] of options.body.entries()) pairs.push(`${k}=${v}`); form = pairs.join('&'); }
+                    else { try { json = JSON.stringify(options.body); } catch {} }
+                }
+                const preCtx = { query, form, json, contentType: ctype, headers: hdrs };
+                const { result: preRes, ctx: newCtx } = runPrePlugins(preCtx);
+                if (preRes.blocked) {
+                    if (CONFIG.metrics) warn(`[前置] 阻断请求: ${preRes.message || ''}`);
+                    try {
+                        const reqInfo = (() => {
+                            try {
+                                const parts = [];
+                                if (typeof newCtx.query === 'string' && newCtx.query) parts.push(`query=${newCtx.query}`);
+                                if (typeof newCtx.form === 'string' && newCtx.form) parts.push(`form=${newCtx.form}`);
+                                if (typeof newCtx.json === 'string' && newCtx.json) parts.push(`json=${newCtx.json}`);
+                                return parts.join(' ');
+                            } catch { return ''; }
+                        })();
+                        showAlert(preRes.message || 'blocked by pre-plugin', {
+                            url,
+                            status: 499,
+                            size: 0,
+                            method,
+                            durationMs: 0,
+                            requestInfo: reqInfo
+                        });
+                    } catch {}
+                    return new Response(preRes.message || 'blocked by pre-plugin', { status: 499 });
+                }
+                const hOut = newCtx.headers || {};
+                const hasHeaderChanges = hOut && Object.keys(hOut).length > 0;
+                const hasBodyChanges = (typeof newCtx.json === 'string') || (typeof newCtx.form === 'string');
+                const hasQueryChange = typeof newCtx.query === 'string' && newCtx.query !== ((() => { try { const u=new URL(url); return u.search?u.search.slice(1):''; } catch { return ''; } })());
+                // 若前置插件未做任何修改，直接透传
+                if (!hasHeaderChanges && !hasBodyChanges && !hasQueryChange) {
+                    return originalFetch.apply(this, args);
+                }
+
+                const headersInit = new Headers();
+                if (inHeaders) {
+                    if (typeof inHeaders.forEach === 'function') { inHeaders.forEach((v,k)=>headersInit.set(k,v)); }
+                    else if (typeof inHeaders === 'object') { for (const k in inHeaders) headersInit.set(k, inHeaders[k]); }
+                }
+                for (const k in hOut) headersInit.set(k, hOut[k]);
+                let bodyOut = options.body;
+                if (typeof newCtx.json === 'string') { bodyOut = newCtx.json; headersInit.set('Content-Type', newCtx.contentType || 'application/json'); }
+                else if (typeof newCtx.form === 'string') { bodyOut = newCtx.form; headersInit.set('Content-Type', newCtx.contentType || 'application/x-www-form-urlencoded'); }
+                // 合并并尽量保留原始 Request 的关键信息（credentials/mode 等），避免引发或影响 CORS 预检
+                const mergedInit = (() => {
+                    const init = { ...(options || {}) };
+                    try {
+                        if (typeof Request !== 'undefined' && resource instanceof Request) {
+                            init.method = init.method || resource.method;
+                            init.mode = init.mode || resource.mode;
+                            init.credentials = init.credentials || resource.credentials;
+                            init.cache = init.cache || resource.cache;
+                            init.redirect = init.redirect || resource.redirect;
+                            init.referrer = init.referrer || resource.referrer;
+                            init.referrerPolicy = init.referrerPolicy || resource.referrerPolicy;
+                            init.integrity = init.integrity || resource.integrity;
+                            init.keepalive = init.keepalive || resource.keepalive;
+                            if (!init.signal && resource.signal) init.signal = resource.signal;
+                        }
+                    } catch {}
+                    init.headers = headersInit;
+                    init.body = bodyOut;
+                    const nm = String((init.method || method) || 'GET').toUpperCase();
+                    if (nm === 'GET' || nm === 'HEAD') { try { delete init.body; } catch {} }
+                    return init;
+                })();
+                args[1] = mergedInit;
+                if (typeof newCtx.query === 'string') { try { const u = new URL(url); u.search = newCtx.query ? ('?' + newCtx.query) : ''; args[0] = (typeof resource === 'string') ? u.href : new Request(u.href, mergedInit); } catch {} }
+            } catch(e) { warn('【前置】执行失败', e); }
+
+            // 重新计算最终 URL，并再做监控判断（允许前置插件修改后再校验）
+            try {
+                const finalUrl = toAbsoluteUrl(typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url));
+                const finalMethod = (args[1] && args[1].method) || method || 'GET';
+                if (!shouldMonitor(finalUrl) || !CONFIG.methods.includes(finalMethod)) {
+                    return originalFetch.apply(this, args);
+                }
+            } catch {}
+
             const response = await originalFetch.apply(this, args);
             const responseClone = response.clone();
 
@@ -1289,6 +1795,8 @@ if (httpStatus >= 500) {
                     }
 
                     const contentType = response.headers.get('content-type') || '';
+                    // 收集响应 headers（用于后置插件）
+                    const respHeaders = {}; try { response.headers && response.headers.forEach && response.headers.forEach((v,k)=>{ respHeaders[k]=v; }); } catch {}
                     const contentLengthHeader = response.headers.get('content-length');
                     const contentLength = contentLengthHeader ? Number(contentLengthHeader) : 0;
                     const isEventStream = /text\/event-stream/i.test(contentType);
@@ -1312,9 +1820,9 @@ if (httpStatus >= 500) {
                     // 仅按头部尺寸超限时做快速告警
                     if (contentLength && contentLength > CONFIG.maxBodySize) {
                         const parsedData = { contentType, parsedBody: null, rawBody: '', size: contentLength };
-                        const warnings = await checkResponseContent(parsedData, { status: response.status, durationMs: 0 });
+                        const warnings = await checkResponseContent(parsedData, { status: response.status, durationMs: 0, headers: respHeaders });
                         if (warnings.length > 0) {
-                            const message = warnings.join('\n');
+                            const message = (warnings || []).map(w => String(w)).join('\n');
                             showAlert(message, {
                                 url,
                                 status: response.status,
@@ -1364,10 +1872,10 @@ if (httpStatus >= 500) {
                     const parsedData = parseResponseBody(response, bodyText);
                     parsedData.size = typeof totalBytes === 'number' && totalBytes > 0 ? totalBytes : parsedData.size;
                     const durationMs = Math.max(0, Math.round(endTs - startTs));
-                    const warnings = await checkResponseContent(parsedData, { status: response.status, durationMs });
+                    const warnings = await checkResponseContent(parsedData, { status: response.status, durationMs, headers: respHeaders });
 
                     if (warnings.length > 0) {
-                        const message = warnings.join('\n');
+                        const message = (warnings || []).map(w => String(w)).join('\n');
                         showAlert(message, {
                             url,
                             status: response.status,
@@ -1411,20 +1919,124 @@ if (httpStatus >= 500) {
     };
 
     // 拦截XMLHttpRequest
+    // 记录 setRequestHeader 以便【前置】插件读取（延后实际设置到 send 前统一应用）
+    const _origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.setRequestHeader = function(k, v){
+        // 当运行时停用/隐藏/未启用时，直接调用原始实现，避免影响业务请求与响应类型
+        if (RUNTIME_DISABLED || !CONFIG.enabled) {
+            try { return _origSetHeader.call(this, k, v); } catch { return undefined; }
+        }
+        // 若未初始化监控（例如 OPTIONS 预检在 open 阶段被跳过），不拦截 header
+        if (!this._monitorMethod || !this._monitorUrl) {
+            try { return _origSetHeader.call(this, k, v); } catch { return undefined; }
+        }
+        // 跳过 CORS 预检（OPTIONS）请求的 header 拦截
+        try { if (String(this._monitorMethod).toUpperCase() === 'OPTIONS') { return _origSetHeader.call(this, k, v); } } catch {}
+        // 对未纳入监控的请求，不拦截 header，直接透传，避免无意触发 CORS 预检
+        try {
+            const method = this._monitorMethod || 'GET';
+            const abs = toAbsoluteUrl(this._monitorUrl || '');
+            if (!shouldMonitor(abs) || !CONFIG.methods.includes(method)) {
+                return _origSetHeader.call(this, k, v);
+            }
+        } catch {}
+        // 恢复到稳定路径：先缓存到 map，最终在 send 时统一合并再 set
+        this._headersSet = this._headersSet || [];
+        this._headersSetMap = this._headersSetMap || {};
+        this._headersSet.push([k, v]);
+        this._headersSetMap[k] = v;
+        return undefined;
+    };
+
     XMLHttpRequest.prototype.open = function (method, url, ...args) {
+        // 跳过 CORS 预检（OPTIONS）
+        if (String(method).toUpperCase() === 'OPTIONS') {
+            return originalXHROpen.apply(this, [method, url, ...args]);
+        }
+        if (RUNTIME_DISABLED || !CONFIG.enabled || !shouldMonitor(toAbsoluteUrl(url)) || !CONFIG.methods.includes(method)) {
+            return originalXHROpen.apply(this, [method, url, ...args]);
+        }
         this._monitorMethod = method;
         this._monitorUrl = url;
         this._monitorStartTs = performance.now();
         this._monitorBound = false;
         this._monitorTooLarge = false;
         this._monitorCL = 0;
+        // 初始化请求头缓存
+        this._headersSet = [];
+        this._headersSetMap = {};
         return originalXHROpen.apply(this, [method, url, ...args]);
     };
 
     XMLHttpRequest.prototype.send = function (data) {
+        if (RUNTIME_DISABLED || !CONFIG.enabled) {
+            return originalXHRSend.call(this, data);
+        }
         const xhr = this;
+        // 若未在 open 阶段初始化（例如 OPTIONS 预检被跳过），直接透传
+        if (!xhr._monitorMethod || !xhr._monitorUrl) {
+            return originalXHRSend.call(this, data);
+        }
         const method = xhr._monitorMethod || 'GET';
+        if (String(method).toUpperCase() === 'OPTIONS') {
+            return originalXHRSend.call(this, data);
+        }
         const url = toAbsoluteUrl(xhr._monitorUrl || '');
+        // 对未命中监控规则的请求，不运行前置插件，直接发送，避免无意添加自定义头引发 CORS 预检
+        try {
+            if (!shouldMonitor(url) || !CONFIG.methods.includes(method)) {
+                return originalXHRSend.call(this, data);
+            }
+        } catch {}
+        // 确保即使不监控也先运行前置插件（日志/阻断/修改）
+        // 仅当 needHide/禁用 时已在上面 return；其余场景继续
+        // 【前置】插件（XHR） 支持阻断与修改；在此阶段不实际设置 header，待合并后统一设置
+        try {
+            const hdrs = { ...(xhr._headersSetMap || {}) };
+            let query=''; try { const u=new URL(url); query=u.search?u.search.slice(1):''; } catch{}
+            let form=''; let json=''; let ctype=hdrs['content-type']||hdrs['Content-Type']||'';
+            if (data) {
+                if (typeof data === 'string') { if (/^[{\[]/.test(data)) json=data; else form=data; }
+                else if (data instanceof URLSearchParams) { form=data.toString(); }
+                else if (typeof FormData !== 'undefined' && data instanceof FormData) { const pairs=[]; for (const [k,v] of data.entries()) pairs.push(`${k}=${v}`); form=pairs.join('&'); }
+                else { try { json = JSON.stringify(data); } catch{} }
+            }
+            const preCtx = { query, form, json, contentType: ctype, headers: { ...hdrs } };
+            const { result: preRes, ctx: newCtx } = runPrePlugins(preCtx);
+            if (preRes.blocked) {
+                if (CONFIG.metrics) warn(`[前置][XHR] 阻断请求: ${preRes.message || ''}`);
+                try {
+                    const reqInfo = (() => {
+                        try {
+                            const parts = [];
+                            if (typeof newCtx.query === 'string' && newCtx.query) parts.push(`query=${newCtx.query}`);
+                            if (typeof newCtx.form === 'string' && newCtx.form) parts.push(`form=${newCtx.form}`);
+                            if (typeof newCtx.json === 'string' && newCtx.json) parts.push(`json=${newCtx.json}`);
+                            return parts.join(' ');
+                        } catch { return ''; }
+                    })();
+                    showAlert(preRes.message || 'blocked by pre-plugin', {
+                        url,
+                        status: 499,
+                        size: 0,
+                        method,
+                        durationMs: 0,
+                        requestInfo: reqInfo
+                    });
+                } catch {}
+                return; // 阻断
+            }
+            // 合并覆盖 headers
+            xhr._headersSetMap = xhr._headersSetMap || {};
+            if (newCtx.headers && typeof newCtx.headers === 'object') {
+                for (const k in newCtx.headers) xhr._headersSetMap[k] = newCtx.headers[k];
+            }
+            // 覆盖 body
+            if (typeof newCtx.json === 'string') { data = newCtx.json; xhr._headersSetMap['Content-Type'] = newCtx.contentType || 'application/json'; }
+            else if (typeof newCtx.form === 'string') { data = newCtx.form; xhr._headersSetMap['Content-Type'] = newCtx.contentType || 'application/x-www-form-urlencoded'; }
+            // 统一实际设置 headers
+            try { const map = xhr._headersSetMap || {}; for (const k in map) { _origSetHeader.call(xhr, k, map[k]); } } catch{}
+        } catch(e){ warn('【前置】执行失败', e); }
 
         if (!xhr._monitorBound) {
             xhr._monitorBound = true;
@@ -1443,13 +2055,15 @@ if (httpStatus >= 500) {
                         const durationMs = xhr._monitorStartTs ? Math.max(0, Math.round(performance.now() - xhr._monitorStartTs)) : 0;
                         let parsedData;
                         if (xhr._monitorTooLarge) {
-                            parsedData = { contentType: xhr.getResponseHeader('content-type') || '', parsedBody: null, rawBody: '', size: xhr._monitorCL || 0 };
+                            parsedData = { contentType: xhr.getResponseHeader('content-type') || '', parsedBody: null, size: xhr._monitorCL || 0 };
                         } else {
                             parsedData = parseResponseBody({ headers: { get: (name) => xhr.getResponseHeader(name) } }, xhr.responseText);
                         }
-                        const warnings = await checkResponseContent(parsedData, { status: xhr.status, durationMs });
+                        // 收集响应 headers
+                        const respHeaders = {}; try { const rawHeaders = xhr.getAllResponseHeaders(); if (rawHeaders) { rawHeaders.trim().split(/\r?\n/).forEach(line=>{ const idx=line.indexOf(':'); if (idx>0){ const k=line.slice(0,idx).trim(); const v=line.slice(idx+1).trim(); respHeaders[k]=v; } }); } } catch{}
+                        const warnings = await checkResponseContent(parsedData, { status: xhr.status, durationMs, headers: respHeaders });
                         if (warnings.length > 0) {
-                            const message = warnings.join('\n');
+                            const message = (warnings || []).map(w => String(w)).join('\n');
                             showAlert(message, {
                                 url,
                                 status: xhr.status,
@@ -1816,6 +2430,36 @@ if (httpStatus >= 500) {
             .plugin-toolbar { display: flex; gap: 10px; justify-content: flex-start; margin: 0; }
             .plugin-toolbar .remove-plugin-btn { border-color: rgba(239,68,68,0.35); }
             .plugin-toolbar .remove-plugin-btn:hover { background: linear-gradient(180deg, rgba(239,68,68,0.12), rgba(244,63,94,0.12)); border-color: rgba(239,68,68,0.5); }
+            /* URL pattern list (scoped to URL patterns only) */
+            #config-urlPatterns { margin-top: 6px; }
+            #config-urlPatterns .http-monitor-config-url-pattern { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+            #config-urlPatterns .http-monitor-config-url-pattern .http-monitor-config-input { flex: 1 1 auto; }
+            /* Remove pattern button */
+            .remove-pattern-btn {
+                appearance: none;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 28px;
+                height: 28px;
+                min-width: 28px;
+                padding: 0;
+                border-radius: 8px;
+                border: 1px solid rgba(239,68,68,0.28);
+                background: linear-gradient(180deg, rgba(239,68,68,0.06), rgba(244,63,94,0.06));
+                color: #ef4444;
+                cursor: pointer;
+                transition: transform .12s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease, color .12s ease;
+            }
+            .remove-pattern-btn:hover {
+                background: linear-gradient(180deg, rgba(239,68,68,0.12), rgba(244,63,94,0.12));
+                border-color: rgba(239,68,68,0.45);
+                color: #dc2626;
+                transform: translateY(-1px);
+                box-shadow: 0 6px 14px rgba(239,68,68,0.18);
+            }
+            .remove-pattern-btn:active { transform: translateY(0); box-shadow: 0 2px 6px rgba(239,68,68,0.16); }
+            .remove-pattern-btn:focus-visible { outline: none; box-shadow: 0 0 0 4px rgba(239,68,68,0.15); }
             .plugin-code-wrapper { position: relative; margin-top: 0; }
             .plugin-code-overlay { pointer-events: none; white-space: pre; background: #f8fafc; color: #111827; border: 1px solid rgba(15,23,42,0.08); border-radius: 8px; }
             /* Fullscreen layer (avoid flicker by reparenting) */
@@ -1887,6 +2531,38 @@ if (httpStatus >= 500) {
                 </div>
 
                 <div class="http-monitor-config-group">
+                    <label class="http-monitor-config-label">仅用元信息判定（跳过深度分析）</label>
+                    <label class="http-monitor-config-label"><input type="checkbox" class="http-monitor-config-checkbox" id="config-metaOnly" ${CONFIG.metaOnly ? 'checked' : ''}> 启用</label>
+                    <div style="font-size:12px;color:#666;margin-top:6px;">避免worker内存消耗过大</div>
+                </div>
+
+                <div class="http-monitor-config-group">
+                    <label class="http-monitor-config-label">Worker 空闲回收（秒）</label>
+                    <input type="number" class="http-monitor-config-input" id="config-workerIdleSeconds" value="${CONFIG.workerIdleSeconds || 15}">
+                    <div style="font-size:12px;color:#666;margin-top:6px;">复用 Worker 空闲多少秒后自动释放</div>
+                </div>
+
+                <div class="http-monitor-config-group">
+                    <label class="http-monitor-config-label">Worker 最大并发</label>
+                    <input type="number" class="http-monitor-config-input" id="config-workerMaxConcurrency" value="${CONFIG.workerMaxConcurrency || 1}">
+                    <div style="font-size:12px;color:#666;margin-top:6px;">同时可运行的最多worker数量，超过该值任务就会排队等待</div>
+                </div>
+
+                
+
+                <div class="http-monitor-config-group">
+                    <label class="http-monitor-config-label">每次执行最大告警条数</label>
+                    <input type="number" class="http-monitor-config-input" id="config-maxWarningsPerRun" value="${CONFIG.maxWarningsPerRun || 50}">
+                    <div style="font-size:12px;color:#666;margin-top:6px;">Worker 端按该值截断返回，防止大结果占用</div>
+                </div>
+
+                <div class="http-monitor-config-group">
+                    <label class="http-monitor-config-label">启用轻量指标日志（控制台）</label>
+                    <label class="http-monitor-config-label"><input type="checkbox" class="http-monitor-config-checkbox" id="config-metrics" ${CONFIG.metrics ? 'checked' : ''}> 启用</label>
+                    <div style="font-size:12px;color:#666;margin-top:6px;">metrics 打开后，会输出简单耗时日志（内置/自定义插件执行、复用 worker run 耗时和传输字节）。</div>
+                </div>
+
+                <div class="http-monitor-config-group">
                     <label class="http-monitor-config-label">响应体大小限制 (字节)</label>
                     <input type="number" class="http-monitor-config-input" id="config-maxBodySize" value="${CONFIG.maxBodySize}">
                     <div style="font-size:12px;color:#666;margin-top:6px;">超过该阈值将触发默认插件"响应体过大"告警</div>
@@ -1907,7 +2583,7 @@ if (httpStatus >= 500) {
                 <div class="http-monitor-config-group">
                     <label class="http-monitor-config-label">监控的HTTP方法</label>
                     <div class="http-monitor-config-method-list" id="config-methods">
-                        ${['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'].map(method =>
+                        ${['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD'].map(method =>
             `<div class="http-monitor-config-method-item">
                                 <input type="checkbox" class="http-monitor-config-checkbox" id="method-${method}"
                                        ${CONFIG.methods.includes(method) ? 'checked' : ''}>
@@ -1920,11 +2596,11 @@ if (httpStatus >= 500) {
                 <div class="http-monitor-config-group">
                     <label class="http-monitor-config-label">URL匹配模式 (正则表达式)</label>
                     <div class="http-monitor-config-url-patterns" id="config-urlPatterns">
-                        ${CONFIG.urlPatterns.map((pattern, index) =>
+                        ${(Array.isArray(CONFIG.urlPatternsRaw) ? CONFIG.urlPatternsRaw : CONFIG.urlPatterns.map(p => p.toString())).map((raw, index) =>
             `<div class="http-monitor-config-url-pattern">
-                                <input type="text" class="http-monitor-config-input" value="${pattern.toString()}"
+                                <input type="text" class="http-monitor-config-input" value="${String(raw).replace(/\"/g, '&quot;')}"
                                        placeholder="例如: /api/.* 或 .*">
-                                <button class="remove-pattern-btn">删除</button>
+                                <button class="remove-pattern-btn" type="button" aria-label="删除此规则" title="删除">&times;</button>
                             </div>`
         ).join('')}
                     </div>
@@ -1934,7 +2610,7 @@ if (httpStatus >= 500) {
                 <div class="http-monitor-config-group">
                     <label class="http-monitor-config-label">内置插件</label>
                     <div class="http-monitor-config-url-patterns">
-                        ${[{ key: 'httpCode', title: 'HTTP状态码检查' }, { key: 'sizeLimit', title: '响应体大小限制' }, { key: 'durationLimit', title: '请求耗时限制' }].map(p => `
+                        ${[{ key: 'httpCode', title: 'HTTP状态码检查' }, { key: 'sizeLimit', title: '响应体大小检查' }, { key: 'durationLimit', title: '请求耗时检查' }].map(p => `
                           <div class=\"http-monitor-config-url-pattern\">
                             <label><input type=\"checkbox\" class=\"builtin-plugin-toggle\" data-key=\"${p.key}\" ${CONFIG.builtinEnabled[p.key] !== false ? 'checked' : ''}> ${p.title}</label>
                           </div>
@@ -1950,34 +2626,73 @@ if (httpStatus >= 500) {
                             <input type="number" class="http-monitor-config-input" id="config-pluginWorkerTimeoutMs" value="${CONFIG.pluginWorkerTimeoutMs}">
                         </div>
                     </div>
-                    <div id="config-plugins" class="plugin-list">
-                        ${(CONFIG.pluginsMeta || []).map((meta, index) => `
-                            <div class=\"http-monitor-config-url-pattern plugin-item\" data-index=\"${index}\">\n\
-                                <div class=\"plugin-header\"> \n\
-                                    <input type=\"text\" class=\"http-monitor-config-input plugin-name\" value=\"${(meta.name || '').replace(/\\"/g, '&quot;')}\" placeholder=\"插件名称（唯一）\"> \n\
-                                    <label><input type=\"checkbox\" class=\"plugin-enabled\" ${meta.enabled !== false ? 'checked' : ''}><b>启用</b></label>\n\
-                                    <label>\n\
-                                        <label><b>执行模式:</b></label>\n\
-                                        <select class=\"plugin-exec-mode\"> \n\
-                                        <option value=\"inherit\" ${meta.executionMode === 'inherit' || !meta.executionMode ? 'selected' : ''}>继承</option>\n\
-                                        <option value=\"reuse\" ${meta.executionMode === 'reuse' ? 'selected' : ''}>重用Worker</option>\n\
-                                        <option value=\"spawn\" ${meta.executionMode === 'spawn' ? 'selected' : ''}>重建Worker</option>\n\
-                                        </select>\n\
-                                        <label><b>超时(ms):</b></label>\n\
-                                        <input type=\"number\" class=\"plugin-timeout\" value=\"${typeof meta.timeoutMs === 'number' ? meta.timeoutMs : ''}\" placeholder=\"继承全局\">\n\
-                                    </label>\n\
-                                </div>\n\
-                                ${renderPluginToolbarHTML()}\n\
-                                ${renderPluginCodeEditorHTML((CONFIG.pluginsSource && CONFIG.pluginsSource[index]) || '')}\n\
+                    <div class="http-monitor-config-group">
+                        <div class="http-monitor-config-label"><b>【前置】插件（请求前执行）</b></div>
+                        <div id="pre-plugins" class="plugin-list">
+                            ${(CONFIG.prePluginsMeta || []).map((meta, index) => `
+                                <div class=\"http-monitor-config-url-pattern plugin-item\" data-index=\"${index}\">\n\
+                                    <div class=\"plugin-header\"> \n\
+                                        <input type=\"text\" class=\"http-monitor-config-input plugin-name\" value=\"${(meta.name || '').replace(/\\"/g, '&quot;')}\" placeholder=\"插件名称（唯一）\"> \n\
+                                        <label><input type=\"checkbox\" class=\"plugin-enabled\" ${meta.enabled !== false ? 'checked' : ''}><b>启用</b></label>\n\
+                                    </div>\n\
+                                    <div class=\"plugin-header\">\n\
+                                        <label style=\"width:100%; height:100%;\">\n\
+                                            <label><b>执行模式:</b></label>\n\
+                                            <select class=\"plugin-exec-mode\"> \n\
+                                            <option value=\"inherit\" ${meta.executionMode === 'inherit' || !meta.executionMode ? 'selected' : ''}>继承</option>\n\
+                                            <option value=\"reuse\" ${meta.executionMode === 'reuse' ? 'selected' : ''}>重用Worker</option>\n\
+                                            <option value=\"spawn\" ${meta.executionMode === 'spawn' ? 'selected' : ''}>重建Worker</option>\n\
+                                            </select>\n\
+                                            <label><b>超时(ms):</b></label>\n\
+                                            <input type=\"number\" class=\"plugin-timeout\" value=\"${typeof meta.timeoutMs === 'number' ? meta.timeoutMs : ''}\" placeholder=\"继承全局\">\n\
+                                        </label>\n\
+                                    </div>\n\
+                                    ${renderPluginToolbarHTML()}\n\
+                                    ${renderPrePluginCodeEditorHTML((CONFIG.prePluginsSource && CONFIG.prePluginsSource[index]) || '')}\n\
+                                </div>
                             `).join('')}
+                        </div>
+                        <div id="pre-plugins-action-bar" class="plugin-toolbar" style="margin-top:8px;">
+                            <button id="add-pre-plugin-btn" class="http-monitor-config-btn-reset">添加插件</button>
+                            <button id="export-pre-plugins-btn" class="http-monitor-config-btn-reset">导出插件JSON</button>
+                            <button id="import-pre-plugins-btn" class="http-monitor-config-btn-reset">导入插件JSON</button>
+                            <input type="file" id="import-pre-plugins-file" accept="application/json" style="display:none;" />
+                        </div>
+                        <div style=\"font-size:12px;color:#666;margin-top:6px;\">上下文: { query, form, json, contentType, headers }</div>
                     </div>
-                    <div class="plugin-toolbar" style="margin-top:8px;">
-                        <button id="add-plugin-btn" class="http-monitor-config-btn-reset">添加插件</button>
-                        <button id="export-plugins-btn" class="http-monitor-config-btn-reset">导出插件JSON</button>
-                        <button id="import-plugins-btn" class="http-monitor-config-btn-reset">导入插件JSON</button>
-                        <input type="file" id="import-plugins-file" accept="application/json" style="display:none;" />
+                    <div class="http-monitor-config-group">
+                        <div class="http-monitor-config-label"><b>【后置】插件（请求后执行）</b></div>
+                        <div id="config-plugins" class="plugin-list">
+                            ${(CONFIG.pluginsMeta || []).map((meta, index) => `
+                                <div class=\"http-monitor-config-url-pattern plugin-item\" data-index=\"${index}\">\n\
+                                    <div class=\"plugin-header\"> \n\
+                                        <input type=\"text\" class=\"http-monitor-config-input plugin-name\" value=\"${(meta.name || '').replace(/\\"/g, '&quot;')}\" placeholder=\"插件名称（唯一）\"> \n\
+                                        <label><input type=\"checkbox\" class=\"plugin-enabled\" ${meta.enabled !== false ? 'checked' : ''}><b>启用</b></label>\n\
+                                    </div>\n\
+                                    <div class=\"plugin-header\">\n\
+                                        <label style=\"width:100%; height:100%;\">\n\
+                                            <label><b>执行模式:</b></label>\n\
+                                            <select class=\"plugin-exec-mode\"> \n\
+                                            <option value=\"inherit\" ${meta.executionMode === 'inherit' || !meta.executionMode ? 'selected' : ''}>继承</option>\n\
+                                            <option value=\"reuse\" ${meta.executionMode === 'reuse' ? 'selected' : ''}>重用Worker</option>\n\
+                                            <option value=\"spawn\" ${meta.executionMode === 'spawn' ? 'selected' : ''}>重建Worker</option>\n\
+                                            </select>\n\
+                                            <label><b>超时(ms):</b></label>\n\
+                                            <input type=\"number\" class=\"plugin-timeout\" value=\"${typeof meta.timeoutMs === 'number' ? meta.timeoutMs : ''}\" placeholder=\"继承全局\">\n\
+                                        </label>\n\
+                                    </div>\n\
+                                    ${renderPluginToolbarHTML()}\n\
+                                    ${renderPluginCodeEditorHTML((CONFIG.pluginsSource && CONFIG.pluginsSource[index]) || '')}\n\
+                                `).join('')}
+                        </div>
+                        <div id="plugins-action-bar" class="plugin-toolbar" style="margin-top:8px;">
+                            <button id="add-plugin-btn" class="http-monitor-config-btn-reset">添加插件</button>
+                            <button id="export-plugins-btn" class="http-monitor-config-btn-reset">导出插件JSON</button>
+                            <button id="import-plugins-btn" class="http-monitor-config-btn-reset">导入插件JSON</button>
+                            <input type="file" id="import-plugins-file" accept="application/json" style="display:none;" />
+                        </div>
+                        <div style=\"font-size:12px;color:#666;margin-top:6px;\">上下文: { httpStatus, durationMs, sizeBytes, body, contentType, headers }；将告警文本 push 到 warnings。</div> 
                     </div>
-                    <div style=\"font-size:12px;color:#666;margin-top:6px;\">插件主体上下文: { httpStatus, durationMs, sizeBytes, body, rawBody, contentType }，将告警文本 push 到 warnings。</div>
                 </div>
                 </div>
 
@@ -2011,7 +2726,7 @@ if (httpStatus >= 500) {
         newPattern.className = 'http-monitor-config-url-pattern';
         newPattern.innerHTML = `
             <input type="text" class="http-monitor-config-input" value="" placeholder="例如: /api/.* 或 .*">
-            <button class="remove-pattern-btn">删除</button>
+            <button class="remove-pattern-btn" type="button" aria-label="删除此规则" title="删除">&times;</button>
         `;
 
         // 为新添加的删除按钮添加事件监听器
@@ -2036,6 +2751,12 @@ if (httpStatus >= 500) {
             const pluginWorkerTimeoutInput = shadowRoot.querySelector('#config-pluginWorkerTimeoutMs');
             const fetchBgTimeoutInput = shadowRoot.querySelector('#config-fetchBackgroundTimeoutMs');
             const fetchBgMaxBytesInput = shadowRoot.querySelector('#config-fetchBackgroundMaxBytes');
+            const metaOnlyCheckbox = shadowRoot.querySelector('#config-metaOnly');
+            const workerIdleSecondsInput = shadowRoot.querySelector('#config-workerIdleSeconds');
+            const workerMaxConcurrencyInput = shadowRoot.querySelector('#config-workerMaxConcurrency');
+            
+            const maxWarningsPerRunInput = shadowRoot.querySelector('#config-maxWarningsPerRun');
+            const metricsCheckbox = shadowRoot.querySelector('#config-metrics');
 
             CONFIG.enabled = enabledCheckbox ? enabledCheckbox.checked : CONFIG.enabled;
             CONFIG.verbose = verboseCheckbox ? verboseCheckbox.checked : CONFIG.verbose;
@@ -2048,10 +2769,16 @@ if (httpStatus >= 500) {
             CONFIG.pluginWorkerTimeoutMs = pluginWorkerTimeoutInput ? Math.max(1000, parseInt(pluginWorkerTimeoutInput.value) || 60000) : CONFIG.pluginWorkerTimeoutMs;
             CONFIG.fetchTimeoutMs = fetchBgTimeoutInput ? Math.max(500, parseInt(fetchBgTimeoutInput.value) || 2000) : CONFIG.fetchTimeoutMs;
             CONFIG.fetchMaxBytes = fetchBgMaxBytesInput ? Math.max(4096, parseInt(fetchBgMaxBytesInput.value) || 131072) : CONFIG.fetchMaxBytes;
+            CONFIG.metaOnly = metaOnlyCheckbox ? !!metaOnlyCheckbox.checked : CONFIG.metaOnly;
+            CONFIG.workerIdleSeconds = workerIdleSecondsInput ? Math.max(1, parseInt(workerIdleSecondsInput.value) || 15) : CONFIG.workerIdleSeconds;
+            CONFIG.workerMaxConcurrency = workerMaxConcurrencyInput ? Math.max(1, parseInt(workerMaxConcurrencyInput.value) || 1) : CONFIG.workerMaxConcurrency;
+            
+            CONFIG.maxWarningsPerRun = maxWarningsPerRunInput ? Math.max(1, parseInt(maxWarningsPerRunInput.value) || 50) : CONFIG.maxWarningsPerRun;
+            CONFIG.metrics = metricsCheckbox ? !!metricsCheckbox.checked : CONFIG.metrics;
 
             // 更新HTTP方法
             CONFIG.methods = [];
-            ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'].forEach(method => {
+            ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD'].forEach(method => {
                 const checkbox = shadowRoot.querySelector(`#method-${method}`);
                 if (checkbox && checkbox.checked) {
                     CONFIG.methods.push(method);
@@ -2061,9 +2788,11 @@ if (httpStatus >= 500) {
             // 更新URL模式（支持 /body/flags 形式）；全部校验通过才写入
             const newPatterns = [];
             const patternInputs = shadowRoot.querySelectorAll('#config-urlPatterns input[type="text"]');
+        const rawValues = [];
             for (const input of patternInputs) {
                 const value = (input.value || '').trim();
                 if (!value) return;
+            rawValues.push(value);
                 // 优先按 /.../flags 解析
                 const revived = revivePattern(value);
                 if (revived instanceof RegExp) {
@@ -2080,6 +2809,7 @@ if (httpStatus >= 500) {
             }
             // 全部通过校验后再落盘
             CONFIG.urlPatterns = newPatterns;
+        CONFIG.urlPatternsRaw = rawValues;
             ensureUrlPatterns();
 
             // 名称冲突可视标记
@@ -2089,7 +2819,7 @@ if (httpStatus >= 500) {
                 throw new Error('插件名称重复');
             }
 
-            // 更新自定义插件列表（名称唯一、启用、源码）
+            // 更新【后置】自定义插件列表（名称唯一、启用、源码）
             CONFIG.pluginsSource = [];
             CONFIG.plugins = [];
             CONFIG.pluginsMeta = [];
@@ -2120,6 +2850,33 @@ if (httpStatus >= 500) {
                 }
             }
 
+            // 更新【前置】插件列表
+            CONFIG.prePluginsSource = [];
+            CONFIG.prePlugins = [];
+            CONFIG.prePluginsMeta = [];
+            const preNodes = shadowRoot.querySelectorAll('#pre-plugins .plugin-item');
+            const usedPre = new Set();
+            preNodes.forEach((node, idx) => {
+                const nameInput = node.querySelector('.plugin-name');
+                const enableInput = node.querySelector('.plugin-enabled');
+                const execModeSel = node.querySelector('.plugin-exec-mode');
+                const timeoutInput = node.querySelector('.plugin-timeout');
+                const codeArea = node.querySelector('.plugin-code');
+                const name = (nameInput && nameInput.value.trim()) || '';
+                if (!name) return;
+                if (usedPre.has(name)) return;
+                usedPre.add(name);
+                const src = (codeArea && codeArea.value.trim()) || '';
+                CONFIG.prePluginsSource.push(src);
+                const executionMode = execModeSel ? (execModeSel.value || 'inherit') : 'inherit';
+                const timeoutMs = timeoutInput && timeoutInput.value ? Math.max(1000, parseInt(timeoutInput.value)) : undefined;
+                const metaObj = { name, enabled: enableInput ? enableInput.checked : true, executionMode };
+                if (typeof timeoutMs === 'number' && !Number.isNaN(timeoutMs)) metaObj.timeoutMs = timeoutMs;
+                CONFIG.prePluginsMeta.push(metaObj);
+                const fn = compilePrePluginFromSource(src);
+                if (typeof fn === 'function') CONFIG.prePlugins.push(fn);
+            });
+
             // 确保至少有一个URL模式
             if (CONFIG.urlPatterns.length === 0) {
                 CONFIG.urlPatterns.push(/.*/);
@@ -2137,29 +2894,8 @@ if (httpStatus >= 500) {
             saveConfig();
             // 再次标准化 urlPatterns
             ensureUrlPatterns();
-
-            // 显示成功消息（绿色 Toast，避免被 .http-monitor-alert 的红色样式覆盖）
-            const okDiv = document.createElement('div');
-            okDiv.className = 'http-monitor-toast';
-            okDiv.textContent = '配置已保存';
-            // 强制样式，避免被全局告警样式覆盖
-            okDiv.style.setProperty('position', 'fixed', 'important');
-            okDiv.style.setProperty('top', '20px', 'important');
-            okDiv.style.setProperty('right', '20px', 'important');
-            okDiv.style.setProperty('z-index', '1000002', 'important');
-            okDiv.style.setProperty('background', '#2e7d32', 'important');
-            okDiv.style.setProperty('color', '#fff', 'important');
-            okDiv.style.setProperty('padding', '8px 12px', 'important');
-            okDiv.style.setProperty('border-radius', '4px', 'important');
-            okDiv.style.setProperty('border-left', '4px solid #1b5e20', 'important');
-            okDiv.style.setProperty('box-shadow', '0 4px 20px rgba(0,0,0,0.3)', 'important');
-            okDiv.style.setProperty('font-family', 'Arial, sans-serif', 'important');
-            okDiv.style.setProperty('font-size', '14px', 'important');
-            okDiv.style.setProperty('white-space', 'nowrap', 'important');
-            okDiv.style.setProperty('max-width', 'unset', 'important');
-            document.body.appendChild(okDiv);
-            setTimeout(() => { try { okDiv.remove(); } catch { } }, 2000);
-
+            // 显示成功消息
+            successToast('配置已保存');
             info('配置已更新:', CONFIG);
         } catch (e) {
             error('保存配置失败:', e);
@@ -2177,8 +2913,8 @@ if (httpStatus >= 500) {
         if (!modalContainer) {
             modalContainer = createConfigModal();
         } else {
-            // 模态框已存在，无需重新绑定事件监听器
-            // 因为createConfigModal()中已经绑定了事件
+            // 模态框已存在，确保重新绑定事件，避免控件丢失
+            bindModalEvents(modalContainer);
         }
 
         // 确保modal显示
@@ -2189,6 +2925,263 @@ if (httpStatus >= 500) {
             const modal = shadowRoot.querySelector('.http-monitor-config-modal');
             if (modal) {
                 modal.style.setProperty('display', 'flex', 'important');
+            }
+            // 确保插件工具控件存在且绑定
+            if (typeof ensurePluginControls === 'function') {
+                try { ensurePluginControls(shadowRoot); } catch(e) { error('ensurePluginControls error', e); }
+            }
+        }
+    }
+
+    // 确保"添加/导出/导入插件"控件存在且事件绑定为最新（幂等）
+    function ensurePluginControls(shadowRoot) {
+        if (!shadowRoot) return;
+        // 后置插件工具条（严格限定在专属容器内，避免落入全局按钮区）
+        const postBar = shadowRoot.querySelector('#plugins-action-bar');
+        if (postBar) {
+            // 添加插件
+            let addBtn = shadowRoot.querySelector('#add-plugin-btn');
+            if (!addBtn) {
+                addBtn = document.createElement('button');
+                addBtn.id = 'add-plugin-btn';
+                addBtn.className = 'http-monitor-config-btn-reset';
+                addBtn.textContent = '添加插件';
+                postBar.appendChild(addBtn);
+            } else if (addBtn.parentElement !== postBar) {
+                postBar.appendChild(addBtn);
+            }
+            if (addBtn) {
+                addBtn.replaceWith(addBtn.cloneNode(true));
+                addBtn = shadowRoot.querySelector('#add-plugin-btn');
+                addBtn.addEventListener('click', (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    const container = shadowRoot.querySelector('#config-plugins');
+                    if (!container) return;
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'http-monitor-config-url-pattern plugin-item';
+                    wrapper.innerHTML = `
+                        <div class="plugin-header"> 
+                            <input type="text" class="http-monitor-config-input plugin-name" value="" placeholder="插件名称（唯一）"> 
+                            <label><input type="checkbox" class="plugin-enabled" checked><b>启用</b></label>
+                        <div/>
+                        <div class="plugin-header"> 
+                            <label>
+                                <label><b>执行模式:</b></label>
+                                <select class="plugin-exec-mode"> 
+                                    <option value="inherit" selected>继承</option>
+                                    <option value="reuse">重用Worker</option>
+                                    <option value="spawn">重建Worker</option>
+                                </select>
+                                <label><b>超时(ms):</b></label>
+                                <input type="number" class="plugin-timeout" placeholder="继承全局">
+                            </label>
+                        </div>
+                        ${renderPluginToolbarHTML()}
+                        ${renderPrePluginCodeEditorHTML('')}
+                    `;
+                    const removeBtn = wrapper.querySelector('.remove-plugin-btn');
+                    if (removeBtn) {
+                        removeBtn.addEventListener('click', (ev) => {
+                            ev.preventDefault(); ev.stopPropagation();
+                            wrapper.remove();
+                            validatePluginNames(shadowRoot);
+                        });
+                    }
+                    container.appendChild(wrapper);
+                    attachPluginEditorBehavior(shadowRoot, wrapper);
+                    validatePluginNames(shadowRoot);
+                });
+            }
+
+            // 导出插件
+            let exportBtn = shadowRoot.querySelector('#export-plugins-btn');
+            if (!exportBtn) {
+                exportBtn = document.createElement('button');
+                exportBtn.id = 'export-plugins-btn';
+                exportBtn.className = 'http-monitor-config-btn-reset';
+                exportBtn.textContent = '导出插件JSON';
+                postBar.appendChild(exportBtn);
+            } else if (exportBtn.parentElement !== postBar) {
+                postBar.appendChild(exportBtn);
+            }
+            if (exportBtn) {
+                exportBtn.replaceWith(exportBtn.cloneNode(true));
+                exportBtn = shadowRoot.querySelector('#export-plugins-btn');
+                exportBtn.addEventListener('click', (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    const data = { pluginsMeta: CONFIG.pluginsMeta || [], pluginsSource: CONFIG.pluginsSource || [] };
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url; a.download = 'http-monitor-plugins.json';
+                    document.body.appendChild(a); a.click(); a.remove();
+                    URL.revokeObjectURL(url);
+                });
+            }
+
+            // 导入插件
+            let importBtn = shadowRoot.querySelector('#import-plugins-btn');
+            let importFile = shadowRoot.querySelector('#import-plugins-file');
+            if (!importBtn) {
+                importBtn = document.createElement('button');
+                importBtn.id = 'import-plugins-btn';
+                importBtn.className = 'http-monitor-config-btn-reset';
+                importBtn.textContent = '导入插件JSON';
+                postBar.appendChild(importBtn);
+            } else if (importBtn.parentElement !== postBar) {
+                postBar.appendChild(importBtn);
+            }
+            if (!importFile) {
+                importFile = document.createElement('input');
+                importFile.type = 'file';
+                importFile.accept = 'application/json';
+                importFile.style.display = 'none';
+                importFile.id = 'import-plugins-file';
+                postBar.appendChild(importFile);
+            } else if (importFile.parentElement !== postBar) {
+                postBar.appendChild(importFile);
+            }
+            if (importBtn && importFile) {
+                importBtn.replaceWith(importBtn.cloneNode(true));
+                importBtn = shadowRoot.querySelector('#import-plugins-btn');
+                importBtn.addEventListener('click', (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    importFile.value = '';
+                    importFile.click();
+                });
+                importFile.replaceWith(importFile.cloneNode(true));
+                importFile = shadowRoot.querySelector('#import-plugins-file');
+                importFile.addEventListener('change', async () => {
+                    const file = importFile.files && importFile.files[0];
+                    if (!file) return;
+                    try {
+                        const text = await file.text();
+                        const json = JSON.parse(text);
+                        const sources = Array.isArray(json.pluginsSource) ? json.pluginsSource : [];
+                        let meta = Array.isArray(json.pluginsMeta) ? json.pluginsMeta : [];
+                        if (meta.length !== sources.length) {
+                            meta = sources.map((_, i) => ({ name: `plugin_${i + 1}`, enabled: true }));
+                        }
+                        CONFIG.pluginsSource = sources;
+                        CONFIG.pluginsMeta = meta;
+                        CONFIG.plugins = [];
+                        sources.forEach(src => { const fn = compilePluginFromSource(src); if (typeof fn === 'function') CONFIG.plugins.push(fn); });
+                        saveConfig();
+                        rebuildPluginsUI(shadowRoot);
+                        validatePluginNames(shadowRoot);
+                        alert('插件配置已导入');
+                    } catch (err) {
+                        alert('导入失败：' + err.message);
+                    }
+                });
+            }
+        }
+
+        // 【前置】插件工具条（同样限定在自身容器）
+        const preBar = shadowRoot.querySelector('#pre-plugins-action-bar');
+        if (preBar) {
+            let addPreBtn = shadowRoot.querySelector('#add-pre-plugin-btn');
+            if (!addPreBtn) {
+                addPreBtn = document.createElement('button');
+                addPreBtn.id = 'add-pre-plugin-btn';
+                addPreBtn.className = 'http-monitor-config-btn-reset';
+                addPreBtn.textContent = '添加插件';
+                preBar.appendChild(addPreBtn);
+            } else if (addPreBtn.parentElement !== preBar) {
+                preBar.appendChild(addPreBtn);
+            }
+            if (addPreBtn) {
+                addPreBtn.replaceWith(addPreBtn.cloneNode(true));
+                addPreBtn = shadowRoot.querySelector('#add-pre-plugin-btn');
+                addPreBtn.addEventListener('click', (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    const preContainer = shadowRoot.querySelector('#pre-plugins');
+                    if (!preContainer) return;
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'http-monitor-config-url-pattern plugin-item';
+                    wrapper.innerHTML = renderPluginItemHTML({ name: '', enabled: true, executionMode: 'inherit' }, 0, '', true);
+                    preContainer.appendChild(wrapper);
+                    attachPluginEditorBehavior(shadowRoot, wrapper);
+                    validatePluginNames(shadowRoot);
+                });
+            }
+
+            let exportPreBtn = shadowRoot.querySelector('#export-pre-plugins-btn');
+            if (!exportPreBtn) {
+                exportPreBtn = document.createElement('button');
+                exportPreBtn.id = 'export-pre-plugins-btn';
+                exportPreBtn.className = 'http-monitor-config-btn-reset';
+                exportPreBtn.textContent = '导出插件JSON';
+                preBar.appendChild(exportPreBtn);
+            } else if (exportPreBtn.parentElement !== preBar) {
+                preBar.appendChild(exportPreBtn);
+            }
+            if (exportPreBtn) {
+                exportPreBtn.replaceWith(exportPreBtn.cloneNode(true));
+                exportPreBtn = shadowRoot.querySelector('#export-pre-plugins-btn');
+                exportPreBtn.addEventListener('click', (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    const data = { prePluginsMeta: CONFIG.prePluginsMeta || [], prePluginsSource: CONFIG.prePluginsSource || [] };
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url; a.download = 'http-monitor-pre-plugins.json';
+                    document.body.appendChild(a); a.click(); a.remove();
+                    URL.revokeObjectURL(url);
+                });
+            }
+
+            let importPreBtn = shadowRoot.querySelector('#import-pre-plugins-btn');
+            let importPreFile = shadowRoot.querySelector('#import-pre-plugins-file');
+            if (!importPreBtn) {
+                importPreBtn = document.createElement('button');
+                importPreBtn.id = 'import-pre-plugins-btn';
+                importPreBtn.className = 'http-monitor-config-btn-reset';
+                importPreBtn.textContent = '导入插件JSON';
+                preBar.appendChild(importPreBtn);
+            } else if (importPreBtn.parentElement !== preBar) {
+                preBar.appendChild(importPreBtn);
+            }
+            if (!importPreFile) {
+                importPreFile = document.createElement('input');
+                importPreFile.type = 'file';
+                importPreFile.accept = 'application/json';
+                importPreFile.style.display = 'none';
+                importPreFile.id = 'import-pre-plugins-file';
+                preBar.appendChild(importPreFile);
+            } else if (importPreFile.parentElement !== preBar) {
+                preBar.appendChild(importPreFile);
+            }
+            if (importPreBtn && importPreFile) {
+                importPreBtn.replaceWith(importPreBtn.cloneNode(true));
+                importPreBtn = shadowRoot.querySelector('#import-pre-plugins-btn');
+                importPreBtn.addEventListener('click', (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    importPreFile.value = '';
+                    importPreFile.click();
+                });
+                importPreFile.replaceWith(importPreFile.cloneNode(true));
+                importPreFile = shadowRoot.querySelector('#import-pre-plugins-file');
+                importPreFile.addEventListener('change', async () => {
+                    const file = importPreFile.files && importPreFile.files[0];
+                    if (!file) return;
+                    try {
+                        const text = await file.text();
+                        const json = JSON.parse(text);
+                        const sources = Array.isArray(json.prePluginsSource) ? json.prePluginsSource : [];
+                        let meta = Array.isArray(json.prePluginsMeta) ? json.prePluginsMeta : [];
+                        if (meta.length !== sources.length) meta = sources.map((_, i)=>({ name: `【前置】plugin_${i+1}`, enabled: true }));
+                        CONFIG.prePluginsSource = sources; CONFIG.prePluginsMeta = meta;
+                        CONFIG.prePlugins = []; sources.forEach(src=>{ const fn=compilePrePluginFromSource(src); if (typeof fn==='function') CONFIG.prePlugins.push(fn); });
+                        saveConfig();
+                        const preList = shadowRoot.querySelector('#pre-plugins'); if (preList) {
+                            preList.innerHTML = (CONFIG.prePluginsMeta || []).map((m,i)=>
+                                renderPluginItemHTML(m, i, (CONFIG.prePluginsSource && CONFIG.prePluginsSource[i]) || '', true)
+                            ).join('');
+                            preList.querySelectorAll('.plugin-item').forEach(item=>{ const removeBtn=item.querySelector('.remove-plugin-btn'); if (removeBtn) removeBtn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); removePrePluginItem(shadowRoot, item); }); attachPluginEditorBehavior(shadowRoot, item); });
+                        }
+                    } catch (err) { alert('导入失败：' + err.message); }
+                });
             }
         }
     }
@@ -2269,7 +3262,7 @@ if (httpStatus >= 500) {
                     urlBox.innerHTML = `
                         <div class="http-monitor-config-url-pattern">
                             <input type="text" class="http-monitor-config-input" value="/.*/" placeholder="例如: /api/.* 或 .*">
-                            <button class="remove-pattern-btn">删除</button>
+                            <button class="remove-pattern-btn" type="button" aria-label="删除此规则" title="删除">&times;</button>
                         </div>`;
                     // 重新绑定删除
                     urlBox.querySelectorAll('.remove-pattern-btn').forEach(btn => {
@@ -2326,7 +3319,7 @@ if (httpStatus >= 500) {
                 CONFIG.maxDurationMs = 2000;
                 CONFIG.fetchTimeoutMs = 2000;
                 CONFIG.fetchMaxBytes = 131072;
-                CONFIG.methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'];
+                CONFIG.methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD'];
                 CONFIG.urlPatterns = [/[a-zA-z]+:\/\/[^\s]*/];
                 CONFIG.builtinEnabled = { httpCode: true, sizeLimit: true, durationLimit: true };
                 CONFIG.pluginsSource = [];
@@ -2342,17 +3335,17 @@ if (httpStatus >= 500) {
                 const maxDurationInput = shadowRoot.querySelector('#config-maxDurationMs'); if (maxDurationInput) maxDurationInput.value = String(CONFIG.maxDurationMs);
                 const fetchBgTimeoutInput = shadowRoot.querySelector('#config-fetchBackgroundTimeoutMs'); if (fetchBgTimeoutInput) fetchBgTimeoutInput.value = String(CONFIG.fetchTimeoutMs);
                 const fetchBgMaxBytesInput = shadowRoot.querySelector('#config-fetchBackgroundMaxBytes'); if (fetchBgMaxBytesInput) fetchBgMaxBytesInput.value = String(CONFIG.fetchMaxBytes);
-                ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'].forEach(m => {
+                ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD'].forEach(m => {
                     const cb = shadowRoot.querySelector(`#method-${m}`);
                     if (cb) cb.checked = CONFIG.methods.includes(m);
                 });
                 // URL 列表
                 const urlBox2 = shadowRoot.querySelector('#config-urlPatterns');
                 if (urlBox2) {
-                    urlBox2.innerHTML = CONFIG.urlPatterns.map(p => `
+                    urlBox2.innerHTML = (Array.isArray(CONFIG.urlPatternsRaw) ? CONFIG.urlPatternsRaw : CONFIG.urlPatterns.map(p => p.toString())).map(raw => `
                         <div class=\"http-monitor-config-url-pattern\">\n\
-                            <input type=\"text\" class=\"http-monitor-config-input\" value=\"${p.toString()}\" placeholder=\"例如: /api/.* 或 .*\">\n\
-                            <button class=\"remove-pattern-btn\">删除</button>\n\
+                            <input type=\"text\" class=\"http-monitor-config-input\" value=\"${String(raw).replace(/\\"/g, '&quot;')}\" placeholder=\"例如: /api/.* 或 .*\">\n\
+                            <button class=\"remove-pattern-btn\" type=\"button\" aria-label=\"删除此规则\" title=\"删除\">&times;</button>\n\
                         </div>
                     `).join('');
                     urlBox2.querySelectorAll('.remove-pattern-btn').forEach(btn => {
@@ -2403,7 +3396,7 @@ if (httpStatus >= 500) {
                         </label>
                     </div>
                     ${renderPluginToolbarHTML()}
-                    ${renderPluginCodeEditorHTML('')}
+                    ${renderPrePluginCodeEditorHTML('')}
                 `;
                 const removeBtn = wrapper.querySelector('.remove-plugin-btn');
                 removeBtn.addEventListener('click', (ev) => {
@@ -2436,6 +3429,19 @@ if (httpStatus >= 500) {
                     e.stopPropagation();
                     item.remove();
                     validatePluginNames(shadowRoot);
+                });
+            }
+            attachPluginEditorBehavior(shadowRoot, item);
+        });
+
+        // 现有【前置】插件项绑定行为
+        shadowRoot.querySelectorAll('#pre-plugins .plugin-item').forEach(item => {
+            const removeBtn = item.querySelector('.remove-plugin-btn');
+            if (removeBtn) {
+                removeBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    removePrePluginItem(shadowRoot, item);
                 });
             }
             attachPluginEditorBehavior(shadowRoot, item);
@@ -2494,6 +3500,82 @@ if (httpStatus >= 500) {
                     alert('导入失败：' + err.message);
                 }
             });
+        }
+
+        // 导出/导入【前置】插件配置
+        const preBar = shadowRoot.querySelector('#pre-plugins-action-bar');
+        if (preBar) {
+            let expPre = shadowRoot.querySelector('#export-pre-plugins-btn');
+            let impPre = shadowRoot.querySelector('#import-pre-plugins-btn');
+            let impPreFile = shadowRoot.querySelector('#import-pre-plugins-file');
+            if (expPre) {
+                expPre.addEventListener('click', () => {
+                    try {
+                        const data = { prePluginsMeta: CONFIG.prePluginsMeta || [], prePluginsSource: CONFIG.prePluginsSource || [] };
+                        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a'); a.href = url; a.download = 'http-monitor-pre-plugins.json';
+                        document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+                    } catch (e) { alert('导出失败: ' + e.message); }
+                });
+            }
+            if (impPre && impPreFile) {
+                impPre.addEventListener('click', () => { impPreFile.value=''; impPreFile.click(); });
+                impPreFile.addEventListener('change', async () => {
+                    const file = impPreFile.files && impPreFile.files[0]; if (!file) return;
+                    try {
+                        const text = await file.text(); const json = JSON.parse(text);
+                        const sources = Array.isArray(json.prePluginsSource) ? json.prePluginsSource : [];
+                        let meta = Array.isArray(json.prePluginsMeta) ? json.prePluginsMeta : [];
+                        if (meta.length !== sources.length) meta = sources.map((_, i)=>({ name: `【前置】plugin_${i+1}`, enabled: true }));
+                        CONFIG.prePluginsSource = sources; CONFIG.prePluginsMeta = meta;
+                        CONFIG.prePlugins = []; sources.forEach(src=>{ const fn=compilePrePluginFromSource(src); if (typeof fn==='function') CONFIG.prePlugins.push(fn); });
+                        saveConfig();
+                        // 仅刷新 pre UI
+                        const preList = shadowRoot.querySelector('#pre-plugins'); if (preList) {
+                            preList.innerHTML = (CONFIG.prePluginsMeta || []).map((m,i)=>
+                                renderPluginItemHTML(m, i, (CONFIG.prePluginsSource && CONFIG.prePluginsSource[i]) || '', true)
+                            ).join('');
+                            preList.querySelectorAll('.plugin-item').forEach(item=>{ const removeBtn=item.querySelector('.remove-plugin-btn'); if (removeBtn) removeBtn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); removePrePluginItem(shadowRoot, item); }); attachPluginEditorBehavior(shadowRoot, item); });
+                        }
+                        alert('【前置】插件配置已导入');
+                    } catch (e) { alert('导入失败：' + e.message); }
+                });
+            }
+            let addPre = shadowRoot.querySelector('#add-pre-plugin-btn');
+            if (addPre) {
+                // 先移除旧监听器再绑定，避免重复绑定
+                addPre.replaceWith(addPre.cloneNode(true));
+                addPre = shadowRoot.querySelector('#add-pre-plugin-btn');
+                addPre.addEventListener('click', (e)=>{
+                    e.preventDefault(); e.stopPropagation();
+                    const container = shadowRoot.querySelector('#pre-plugins'); if (!container) return;
+                    const wrapper = document.createElement('div'); wrapper.className='http-monitor-config-url-pattern plugin-item';
+                    wrapper.innerHTML = `
+                        <div class=\"plugin-header\"> 
+                            <input type=\"text\" class=\"http-monitor-config-input plugin-name\" value=\"\" placeholder=\"插件名称（唯一）\"> 
+                            <label><input type=\"checkbox\" class=\"plugin-enabled\" checked><b>启用</b></label>
+                        </div>
+                        <div class=\"plugin-header\">\n\
+                            <label style=\"width:100%; height:100%;\">\n\
+                                <label><b>执行模式:</b></label>\n\
+                                <select class=\"plugin-exec-mode\"> \n\
+                                <option value=\"inherit\" selected>继承</option>\n\
+                                <option value=\"reuse\">重用Worker</option>\n\
+                                <option value=\"spawn\">重建Worker</option>\n\
+                                </select>\n\
+                                <label><b>超时(ms):</b></label>\n\
+                                <input type=\"number\" class=\"plugin-timeout\" placeholder=\"默认继承全局\">\n\
+                            </label>\n\
+                        </div>
+                        ${renderPluginToolbarHTML()}
+                        ${renderPrePluginCodeEditorHTML('')}
+                    `;
+                    const removeBtn = wrapper.querySelector('.remove-plugin-btn');
+                    if (removeBtn) removeBtn.addEventListener('click', (ev)=>{ ev.preventDefault(); ev.stopPropagation(); removePrePluginItem(shadowRoot, wrapper); });
+                    container.appendChild(wrapper); attachPluginEditorBehavior(shadowRoot, wrapper);
+                });
+            }
         }
 
         // 导出/导入所有配置（追加到 http-monitor-config-buttons 区域）
@@ -2896,17 +3978,15 @@ if (httpStatus >= 500) {
             }
         };
     }
-
-    initMenu()
-    if (needHide()){
-        return;
-    }
-
-    // 页面加载完成后初始化
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
+    // 依据 needHide 决定是否启动；使用面向对象的启停统一管理
+    if (!needHide()) {
+        if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', () => { try { window.__httpMonitor.start(); } catch(e) { error('start error', e) } });
+        } else {
+                try { window.__httpMonitor.start(); } catch(e) { error('start error', e) }
+            }
     } else {
-        init();
+        try { window.__httpMonitor.stop(); } catch(e) { error('stop error', e) }
     }
 
 })();
