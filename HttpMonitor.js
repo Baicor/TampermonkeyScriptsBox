@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HTTP监控器
 // @namespace    http://tampermonkey.net/
-// @version      0.6
+// @version      0.7
 // @description  监控HTTP请求并弹窗警告
 // @author       Galio
 // @match        *://*/*
@@ -561,7 +561,7 @@ function successToast(message) {
             try { loadConfig(); } catch (e) { error('loadConfig failed', e); }
             try { this.mountUI(); } catch (e) { error('[mountUI] failed', e); }
             this.started = true;
-            
+
             info('started');
         }
 
@@ -1575,9 +1575,6 @@ function successToast(message) {
 
         // 再跑用户自定义插件（按开关）
         if (Array.isArray(CONFIG.plugins) && Array.isArray(CONFIG.pluginsMeta)) {
-            // 主线程快速短路：若前面的内置规则已无输出，则判定为低风险，跳过深度分析
-            const quickNoRisk = warnings.length === 0;
-
             // 分组：reuse/spawn 以及 inherit->跟随全局（pluginWorkerEnabled?reuse:main）
             const reuseSources = [];
             const spawnSources = [];
@@ -1592,7 +1589,7 @@ function successToast(message) {
             });
 
             // 1) reuse 组：单 Worker 执行（仅在非低风险且未启用 metaOnly 时进入）
-            if (reuseSources.length > 0 && !quickNoRisk && !CONFIG.metaOnly) {
+            if (reuseSources.length > 0 && !CONFIG.metaOnly) {
                 try {
                     const lightContext = { httpStatus: meta && typeof meta.status === 'number' ? meta.status : undefined,
                         durationMs: meta && typeof meta.durationMs === 'number' ? meta.durationMs : undefined,
@@ -1615,7 +1612,7 @@ function successToast(message) {
 
             // 2) spawn 组：逐个创建临时 Worker（仅在非低风险且未启用 metaOnly 时进入）
             for (const item of spawnSources) {
-                if (quickNoRisk || CONFIG.metaOnly) break;
+                if (CONFIG.metaOnly) break;
                 try {
                     const blobUrl = URL.createObjectURL(new Blob([`self.onmessage=e=>{const{ id,src,ctx }=e.data||{};try{let fn=null;const s=String(src||'').trim();if(/^(function|\\()/i.test(s)){fn=(new Function('return ('+s+')'))();}else{const w='return function(ctx){\\n  const { httpStatus, durationMs, sizeBytes, body, contentType } = ctx;\\n  const warnings = [];\\n  try {\\n'+src+'\\n  } catch (e) {}\\n  return warnings;\\n}';fn=(new Function(w))();}const res=fn?fn(ctx)||[]:[];self.postMessage({id,ok:true,warnings:res});}catch(err){self.postMessage({id,ok:false,error:String(err)})}};`], { type: 'application/javascript' }));
                     const worker = new Worker(blobUrl);
