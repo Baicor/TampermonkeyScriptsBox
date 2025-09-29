@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HTTP监控器
 // @namespace    http://tampermonkey.net/
-// @version      0.7
+// @version      0.8
 // @description  监控HTTP请求并弹窗警告
 // @author       Galio
 // @match        *://*/*
@@ -667,6 +667,16 @@ function successToast(message) {
         });
     }
 
+    // 一键清除所有告警：清空队列并移除所有告警容器
+    function clearAllAlerts() {
+        try { ALERT_QUEUE.length = 0; } catch {}
+        try {
+            const nodes = document.querySelectorAll('.http-monitor-alert-container');
+            nodes.forEach(n => { try { n.remove(); } catch {} });
+        } catch {}
+        try { ALERT_ACTIVE = false; } catch {}
+    }
+
     // 显示警告弹窗（入队）
     function showAlert(message, responseData) {
         if (RUNTIME_DISABLED || !CONFIG.enabled) return;
@@ -744,6 +754,7 @@ function successToast(message) {
 
             // 创建Shadow DOM隔离的弹窗元素
             const alertContainer = document.createElement('div');
+            alertContainer.className = 'http-monitor-alert-container';
             const shadowRoot = alertContainer.attachShadow({ mode: 'open' });
 
             // 添加样式
@@ -827,8 +838,9 @@ function successToast(message) {
                     <div class="http-monitor-section-body">${httpMetaContentDisplay}</div>
                 </div>
                 <div class="http-monitor-actions">
-            <button class="http-monitor-copy" id="copy-btn-${Date.now()}">复制</button>
+                    <button class="http-monitor-copy" id="copy-btn-${Date.now()}">复制</button>
                     <button class="http-monitor-copy" id="har-btn-${Date.now()}" style="margin-left:8px !important; background: rgba(255,255,255,0.25) !important;">导出HAR</button>
+                    <button class="http-monitor-copy" id="clear-all-btn-${Date.now()}" style="margin-left:8px !important; background: rgba(255,255,255,0.25) !important;">清空全部</button>
                 </div>
         `;
 
@@ -838,6 +850,7 @@ function successToast(message) {
             // 添加复制和导出按钮事件监听器
             const copyBtn = shadowRoot.querySelector('.http-monitor-copy');
             const harBtn = shadowRoot.querySelector(`[id^=har-btn-]`);
+            const clearAllBtn = shadowRoot.querySelector(`[id^=clear-all-btn-]`);
             copyBtn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -896,6 +909,13 @@ function successToast(message) {
                     } catch (err) {
                         error('导出HAR失败', err);
                     }
+                });
+            }
+
+            if (clearAllBtn) {
+                clearAllBtn.addEventListener('click', (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    try { clearAllAlerts(); } catch {}
                 });
             }
 
@@ -1009,7 +1029,7 @@ function successToast(message) {
                 if (typeof fn === 'function') return fn;
             }
             // 新格式：仅写函数主体，由框架包裹
-            const wrapped = `return function(ctx){\n  const { httpStatus, durationMs, sizeBytes, body, contentType } = ctx;\n  const warnings = [];\n  try {\n${trimmed}\n  } catch (e) {}\n  return warnings;\n}`;
+            const wrapped = `return function(ctx){\n  const { httpStatus, durationMs, sizeBytes, body, rawBody, contentType, headers } = ctx;\n  const warnings = [];\n  try {\n${trimmed}\n  } catch (e) {}\n  return warnings;\n}`;
             return new Function(wrapped)();
         } catch (e) {
             warn('插件编译失败:', e);
@@ -1067,7 +1087,7 @@ function successToast(message) {
     let pluginWorkerQueue = [];
     let pluginWorkerLoaded = false;
     function buildWorkerCode(){
-        return `(()=>{\nlet loadedFns=null;\nfunction compileOne(src){const s=String(src||'').trim();if(/^(function|\\()/i.test(s)){return (new Function('return ('+s+')'))();}const w='return function(ctx){\\n  const { httpStatus, durationMs, sizeBytes, body, contentType } = ctx;\\n  const warnings = [];\\n  try {\\n'+s+'\\n  } catch (e) {}\\n  return warnings;\\n}';return (new Function(w))();}\nself.onmessage=async(e)=>{const d=e.data||{};const {id,type}=d;try{if(type==='load'){const sources=Array.isArray(d.sources)?d.sources:[];loadedFns=sources.map(s=>{try{return compileOne(s)}catch(e){return null}}).filter(fn=>typeof fn==='function');self.postMessage({id,ok:true,loaded:(loadedFns?loadedFns.length:0)});return;}if(type==='run'){let fns=loadedFns; if(!fns){const sources=Array.isArray(d.sources)?d.sources:[];fns=sources.map(s=>{try{return compileOne(s)}catch(e){return null}}).filter(fn=>typeof fn==='function');}const ctx=d.context||{};const out=[];for(let i=0;i<(fns?fns.length:0);i++){try{const res=fns[i](ctx)||[];for(const w of res) out.push(w);}catch(e){}}const max= typeof d.maxWarnings==='number'?d.maxWarnings:50;const trimmed=out.slice(0,Math.max(0,max));self.postMessage({id,ok:true,warnings:trimmed});return;}self.postMessage({id,ok:false,error:'unknown_type'});}catch(err){self.postMessage({id,ok:false,error:String(err)})}};\n})();`;
+        return `(()=>{\nlet loadedFns=null;\nfunction compileOne(src){const s=String(src||'').trim();if(/^(function|\\()/i.test(s)){return (new Function('return ('+s+')'))();}const w='return function(ctx){\\n  const { httpStatus, durationMs, sizeBytes, body, rawBody, contentType, headers } = ctx;\\n  const warnings = [];\\n  try {\\n'+s+'\\n  } catch (e) {}\\n  return warnings;\\n}';return (new Function(w))();}\nself.onmessage=async(e)=>{const d=e.data||{};const {id,type}=d;try{if(type==='load'){const sources=Array.isArray(d.sources)?d.sources:[];loadedFns=sources.map(s=>{try{return compileOne(s)}catch(e){return null}}).filter(fn=>typeof fn==='function');self.postMessage({id,ok:true,loaded:(loadedFns?loadedFns.length:0)});return;}if(type==='run'){let fns=loadedFns; if(!fns){const sources=Array.isArray(d.sources)?d.sources:[];fns=sources.map(s=>{try{return compileOne(s)}catch(e){return null}}).filter(fn=>typeof fn==='function');}const ctx=d.context||{};const out=[];for(let i=0;i<(fns?fns.length:0);i++){try{const res=fns[i](ctx)||[];for(const w of res) out.push(w);}catch(e){}}const max= typeof d.maxWarnings==='number'?d.maxWarnings:50;const trimmed=out.slice(0,Math.max(0,max));self.postMessage({id,ok:true,warnings:trimmed});return;}self.postMessage({id,ok:false,error:'unknown_type'});}catch(err){self.postMessage({id,ok:false,error:String(err)})}};\n})();`;
     }
     function ensurePluginWorker() {
         if (pluginWorker) return pluginWorker;
@@ -1177,7 +1197,7 @@ function successToast(message) {
             // JS 关键字
             s = s.replace(/\b(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|try|catch|finally|throw|new|in|instanceof|typeof|void)\b/g, '<span class="hl-kw">$1</span>');
             // 内置对象/上下文提示
-            s = s.replace(/\b(JSON|Date|Math|Array|Object|String|Number|Boolean|RegExp|warnings|httpStatus|durationMs|sizeBytes|body|rawBody|contentType)\b/g, '<span class="hl-builtin">$1</span>');
+            s = s.replace(/\b(JSON|Date|Math|Array|Object|String|Number|Boolean|RegExp|warnings|httpStatus|durationMs|sizeBytes|body|rawBody|contentType|headers)\b/g, '<span class="hl-builtin">$1</span>');
         }
 
         // 还原注释与字符串
@@ -1555,7 +1575,9 @@ function successToast(message) {
             durationMs: meta && typeof meta.durationMs === 'number' ? meta.durationMs : undefined,
             sizeBytes: parsedData.size,
             body: parsedData.parsedBody,
-            contentType: parsedData.contentType
+            rawBody: typeof parsedData.rawBody === 'string' ? parsedData.rawBody : (typeof parsedData.text === 'string' ? parsedData.text : undefined),
+            contentType: parsedData.contentType,
+            headers: meta && meta.headers ? meta.headers : undefined
         };
 
         // 先跑内置插件（按开关）
@@ -1594,7 +1616,10 @@ function successToast(message) {
                     const lightContext = { httpStatus: meta && typeof meta.status === 'number' ? meta.status : undefined,
                         durationMs: meta && typeof meta.durationMs === 'number' ? meta.durationMs : undefined,
                         sizeBytes: parsedData && typeof parsedData.size === 'number' ? parsedData.size : undefined,
-                        contentType: parsedData ? parsedData.contentType : undefined };
+                        body: parsedData ? parsedData.parsedBody : undefined,
+                        rawBody: parsedData && typeof parsedData.rawBody === 'string' ? parsedData.rawBody : (parsedData && typeof parsedData.text === 'string' ? parsedData.text : undefined),
+                        contentType: parsedData ? parsedData.contentType : undefined,
+                        headers: meta && meta.headers ? meta.headers : undefined };
                     // 仅在需要且类型允许时发送原始字节（transferable）
                     const tStart = performance.now();
                     const out = await runInReuseWorker(reuseSources.map(r => r.src), lightContext, null);
@@ -1614,14 +1639,14 @@ function successToast(message) {
             for (const item of spawnSources) {
                 if (CONFIG.metaOnly) break;
                 try {
-                    const blobUrl = URL.createObjectURL(new Blob([`self.onmessage=e=>{const{ id,src,ctx }=e.data||{};try{let fn=null;const s=String(src||'').trim();if(/^(function|\\()/i.test(s)){fn=(new Function('return ('+s+')'))();}else{const w='return function(ctx){\\n  const { httpStatus, durationMs, sizeBytes, body, contentType } = ctx;\\n  const warnings = [];\\n  try {\\n'+src+'\\n  } catch (e) {}\\n  return warnings;\\n}';fn=(new Function(w))();}const res=fn?fn(ctx)||[]:[];self.postMessage({id,ok:true,warnings:res});}catch(err){self.postMessage({id,ok:false,error:String(err)})}};`], { type: 'application/javascript' }));
+                    const blobUrl = URL.createObjectURL(new Blob([`self.onmessage=e=>{const{ id,src,ctx }=e.data||{};try{let fn=null;const s=String(src||'').trim();if(/^(function|\\()/i.test(s)){fn=(new Function('return ('+s+')'))();}else{const w='return function(ctx){\\n  const { httpStatus, durationMs, sizeBytes, body, rawBody, contentType, headers } = ctx;\\n  const warnings = [];\\n  try {\\n'+src+'\\n  } catch (e) {}\\n  return warnings;\\n}';fn=(new Function(w))();}const res=fn?fn(ctx)||[]:[];self.postMessage({id,ok:true,warnings:res});}catch(err){self.postMessage({id,ok:false,error:String(err)})}};`], { type: 'application/javascript' }));
                     const worker = new Worker(blobUrl);
                     const execId = 's_' + Math.random().toString(36).slice(2);
                     const timeoutMs = Math.max(1000, Number(item.meta.timeoutMs || CONFIG.pluginWorkerTimeoutMs || 60000));
                     const pr = new Promise((resolve) => {
                         const onMsg = (ev) => { const d = ev.data || {}; if (d.id === execId) { worker.removeEventListener('message', onMsg); resolve(d); } };
                         worker.addEventListener('message', onMsg);
-                        worker.postMessage({ id: execId, src: item.src, ctx: { httpStatus: meta && typeof meta.status==='number'?meta.status:undefined, durationMs: meta && typeof meta.durationMs==='number'?meta.durationMs:undefined, sizeBytes: parsedData && typeof parsedData.size==='number'?parsedData.size:undefined, contentType: parsedData?parsedData.contentType:undefined } });
+                        worker.postMessage({ id: execId, src: item.src, ctx: { httpStatus: meta && typeof meta.status==='number'?meta.status:undefined, durationMs: meta && typeof meta.durationMs==='number'?meta.durationMs:undefined, sizeBytes: parsedData && typeof parsedData.size==='number'?parsedData.size:undefined, body: parsedData?parsedData.parsedBody:undefined, rawBody: parsedData && typeof parsedData.rawBody==='string'?parsedData.rawBody:(parsedData && typeof parsedData.text==='string'?parsedData.text:undefined), contentType: parsedData?parsedData.contentType:undefined, headers: meta && meta.headers ? meta.headers : undefined } });
                     });
                     let res = null; let timed2 = false; const tmr = setTimeout(() => { try { worker.terminate(); } catch(e) {error("worker中断错误", e)} try { URL.revokeObjectURL(blobUrl); } catch(e) {error("revokeObjectURL error in worker", e)} res = { ok: false, error: 'timeout' }; timed2 = true; }, timeoutMs);
                     res = await pr; clearTimeout(tmr); try { worker.terminate(); } catch(e) {error("worker中断错误", e)} try { URL.revokeObjectURL(blobUrl); } catch(e) {error("revokeObjectURL error in worker", e)}
@@ -2070,11 +2095,11 @@ function successToast(message) {
                                 requestInfo: (() => {
                                     try {
                                         const u = new URL(url);
-                                        const qp = u.search ? `Query=>${u.search.slice(1)}` : '';
+                                        const qp = u.search.trim() ? `Query=>${u.search.slice(1)}` : '';
                                         let bodyInfo = '';
                                         const sent = data;
                                         if (typeof sent === 'string') {
-                                            bodyInfo = ` Body=>${sent}`;
+                                            bodyInfo = sent.trim() ? `Body=>${sent}` : '';
                                         } else if (sent instanceof URLSearchParams) {
                                             bodyInfo = ` Form=>${sent.toString()}`;
                                         } else if (typeof FormData !== 'undefined' && sent instanceof FormData) {
@@ -2688,7 +2713,7 @@ function successToast(message) {
                             <button id="import-plugins-btn" class="http-monitor-config-btn-reset">导入插件JSON</button>
                             <input type="file" id="import-plugins-file" accept="application/json" style="display:none;" />
                         </div>
-                        <div style=\"font-size:12px;color:#666;margin-top:6px;\">上下文: { httpStatus, durationMs, sizeBytes, body, contentType, headers }；将告警文本 push 到 warnings。</div> 
+                <div style=\"font-size:12px;color:#666;margin-top:6px;\">上下文: { httpStatus, durationMs, sizeBytes, body, rawBody, contentType, headers }；将告警文本 push 到 warnings。</div> 
                     </div>
                 </div>
                 </div>
